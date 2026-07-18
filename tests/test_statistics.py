@@ -45,7 +45,12 @@ class StatisticsTests(unittest.TestCase):
             records = root / "performance_records.jsonl"
             ttft = root / "ttft_records.jsonl"
             records.write_text("", encoding="utf-8")
-            row = {"execution_key": "ttft:m:w:1", "model": "m", "workload_id": "w", "ttft_seconds": 0.1}
+            row = {
+                "execution_key": "ttft:m:w:1",
+                "model": "m",
+                "workload_id": "w",
+                "ttft_seconds": 0.1,
+            }
             ttft.write_text(json.dumps(row) + "\n" + json.dumps(row) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "TTFT duplicada"):
                 summarize(records, ttft, root)
@@ -69,11 +74,63 @@ class StatisticsTests(unittest.TestCase):
                 }
             }
         }
-        score = performance_scores(summary, ["m"], {
-            "generation": 0.35, "prompt": 0.20, "hot_latency": 0.15, "ttft": 0.15, "cold_load": 0.15
-        })["m"]
+        score = performance_scores(
+            summary,
+            ["m"],
+            {
+                "generation": 0.35,
+                "prompt": 0.20,
+                "hot_latency": 0.15,
+                "ttft": 0.15,
+                "cold_load": 0.15,
+            },
+        )["m"]
         self.assertIsNone(score["memory_components"]["swap"])
         self.assertIsNone(score["memory_stability_score"])
+
+    def test_performance_summary_groups_before_weighting(self):
+        records = []
+        ttft_rows = []
+        for workload, generation in (("w1", 10.0), ("w2", 30.0)):
+            for state in ("cold", "hot"):
+                records.append(
+                    {
+                        "execution_key": f"m:{workload}:{state}:1",
+                        "model": "m",
+                        "workload_id": workload,
+                        "temperature_state": state,
+                        "run_index": 1,
+                        "runner_error": None,
+                        "cold_unload_verified": state == "cold",
+                        "workload_compliance": {"valid": True},
+                        "metrics": {
+                            "prompt_tokens_per_second": 20.0,
+                            "generation_tokens_per_second": generation,
+                            "total_seconds": 1.0,
+                            "load_seconds": 2.0,
+                        },
+                        "model_ps": {"size_vram": 1024},
+                        "swap_delta_bytes": 0,
+                    }
+                )
+            ttft_rows.append(
+                {
+                    "execution_key": f"ttft:m:{workload}:1",
+                    "model": "m",
+                    "workload_id": workload,
+                    "ttft_seconds": 0.1,
+                }
+            )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            record_path = root / "records.jsonl"
+            ttft_path = root / "ttft.jsonl"
+            record_path.write_text("".join(json.dumps(row) + "\n" for row in records))
+            ttft_path.write_text("".join(json.dumps(row) + "\n" for row in ttft_rows))
+            result = summarize(record_path, ttft_path, root, {"w1": 0.25, "w2": 0.75})
+        model = result["models"]["m"]
+        self.assertEqual(set(model["workloads"]), {"w1", "w2"})
+        self.assertEqual(model["aggregate"]["hot_generation_tps"]["median"], 25.0)
 
 
 if __name__ == "__main__":
