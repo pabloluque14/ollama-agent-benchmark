@@ -91,11 +91,15 @@ def create_lock(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fija digests y metadatos exactos de los modelos instalados."
+        prog="oab lock", description="Fija digests y metadatos exactos de los modelos instalados."
     )
-    parser.add_argument("--config", type=pathlib.Path, default=CONFIG_PATH)
-    parser.add_argument("--output", type=pathlib.Path, default=LOCK_PATH)
-    parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--config", type=pathlib.Path, default=CONFIG_PATH, help="Ruta de benchmark.json"
+    )
+    parser.add_argument(
+        "--output", type=pathlib.Path, default=LOCK_PATH, help="Ruta del lock que se creará"
+    )
+    parser.add_argument("--force", action="store_true", help="Sobrescribe un lock existente")
     args = parser.parse_args(argv)
     try:
         lock = create_lock(args.config, args.output, args.force)

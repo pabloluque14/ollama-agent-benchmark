@@ -960,7 +960,7 @@ def parse_csv_arg(value: str | None) -> list[str] | None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(prog="oab functional", description=__doc__)
     parser.add_argument(
         "--mode", choices=("dry-run", "smoke", "official-functional"), default="dry-run"
     )

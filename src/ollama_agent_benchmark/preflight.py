@@ -126,12 +126,17 @@ def run_preflight(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Comprueba seguridad, identidad de modelos y condiciones del sistema."
+        prog="oab preflight",
+        description="Comprueba seguridad, identidad de modelos y condiciones del sistema.",
     )
-    parser.add_argument("--config", type=pathlib.Path, default=CONFIG_PATH)
-    parser.add_argument("--lock", type=pathlib.Path, default=LOCK_PATH)
-    parser.add_argument("--require-ac", action="store_true")
-    parser.add_argument("--json", action="store_true", dest="as_json")
+    parser.add_argument(
+        "--config", type=pathlib.Path, default=CONFIG_PATH, help="Ruta de benchmark.json"
+    )
+    parser.add_argument("--lock", type=pathlib.Path, default=LOCK_PATH, help="Ruta del lock")
+    parser.add_argument("--require-ac", action="store_true", help="Exige corriente en macOS")
+    parser.add_argument(
+        "--json", action="store_true", dest="as_json", help="Imprime resultados como JSON"
+    )
     args = parser.parse_args(argv)
 
     results = run_preflight(args.config, args.lock, args.require_ac)

@@ -12,7 +12,8 @@ from .functional import VirtualTools, resolve_expected
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Valida configuración, dataset y simulador sin llamar a Ollama."
+        prog="oab validate",
+        description="Valida configuración, dataset y simulador sin llamar a Ollama.",
     )
     parser.parse_args(argv)
     try:

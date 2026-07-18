@@ -20,23 +20,7 @@ def init_config(force: bool = False) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="oab",
-        description="Benchmark reproducible de modelos agentes locales servidos por Ollama.",
-    )
-    sub = parser.add_subparsers(dest="command", required=True)
-    init_p = sub.add_parser("init", help="Crea config/benchmark.json desde el ejemplo")
-    init_p.add_argument("--force", action="store_true")
-    sub.add_parser("lock", help="Fija digests y metadatos exactos")
-    sub.add_parser("preflight", help="Comprueba el entorno")
-    sub.add_parser("validate", help="Audita dataset y simulador sin Ollama")
-    sub.add_parser("functional", help="Ejecuta el benchmark funcional")
-    sub.add_parser("performance", help="Ejecuta velocidad, TTFT y memoria")
-    sub.add_parser("report", help="Genera informe y ranking")
-    args, remainder = parser.parse_known_args(argv)
-
-    if args.command == "init":
-        return init_config(args.force)
+    arguments = sys.argv[1:] if argv is None else argv
     handlers = {
         "lock": model_lock.main,
         "preflight": preflight.main,
@@ -45,7 +29,29 @@ def main(argv: list[str] | None = None) -> int:
         "performance": performance.main,
         "report": report.main,
     }
-    return handlers[args.command](remainder)
+    if arguments and arguments[0] in handlers:
+        return handlers[arguments[0]](arguments[1:])
+
+    parser = argparse.ArgumentParser(
+        prog="oab",
+        description="Benchmark reproducible de modelos agentes locales servidos por Ollama.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+    init_p = sub.add_parser("init", help="Crea config/benchmark.json desde el ejemplo")
+    init_p.add_argument(
+        "--force", action="store_true", help="Sobrescribe la configuración local existente"
+    )
+    sub.add_parser("lock", help="Fija digests y metadatos exactos")
+    sub.add_parser("preflight", help="Comprueba el entorno")
+    sub.add_parser("validate", help="Audita dataset y simulador sin Ollama")
+    sub.add_parser("functional", help="Ejecuta el benchmark funcional")
+    sub.add_parser("performance", help="Ejecuta velocidad, TTFT y memoria")
+    sub.add_parser("report", help="Genera informe y ranking")
+    args = parser.parse_args(arguments)
+
+    if args.command == "init":
+        return init_config(args.force)
+    raise AssertionError(f"Comando no despachado: {args.command}")
 
 
 if __name__ == "__main__":

@@ -333,11 +333,12 @@ def fmt_score(value: float | None) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Combina calidad, herramientas, velocidad y memoria en un informe explicado."
+        prog="oab report",
+        description="Combina calidad, herramientas, velocidad y memoria en un informe explicado.",
     )
-    parser.add_argument("--functional-run", type=pathlib.Path)
-    parser.add_argument("--performance-run", type=pathlib.Path)
-    parser.add_argument("--output", type=pathlib.Path)
+    parser.add_argument("--functional-run", type=pathlib.Path, help="Ruta del run funcional")
+    parser.add_argument("--performance-run", type=pathlib.Path, help="Ruta del run de rendimiento")
+    parser.add_argument("--output", type=pathlib.Path, help="Carpeta donde se escribirá el informe")
     parser.add_argument(
         "--allow-incompatible", action="store_true", help="Informe exploratorio, nunca oficial"
     )

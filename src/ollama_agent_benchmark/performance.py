@@ -322,16 +322,21 @@ def summarize(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Mide carga, prompt, generación, TTFT y memoria de modelos Ollama."
+        prog="oab performance",
+        description="Mide carga, prompt, generación, TTFT y memoria de modelos Ollama.",
     )
     parser.add_argument(
         "--mode", choices=("dry-run", "smoke", "official-performance"), default="dry-run"
     )
     parser.add_argument("--models", help="Modelos separados por comas; deben existir en el lock")
     parser.add_argument("--workloads", help="IDs de cargas separados por comas")
-    parser.add_argument("--run-id")
-    parser.add_argument("--allow-battery", action="store_true")
-    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--run-id", help="Identificador estable para guardar o reanudar")
+    parser.add_argument(
+        "--allow-battery",
+        action="store_true",
+        help="Permite batería, pero marca un run oficial como exploratorio",
+    )
+    parser.add_argument("--resume", action="store_true", help="Reanuda un run compatible")
     args = parser.parse_args(argv)
 
     try:

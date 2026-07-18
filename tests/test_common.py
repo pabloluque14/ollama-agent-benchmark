@@ -1,8 +1,11 @@
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
+from ollama_agent_benchmark.cli import main as cli_main
 from ollama_agent_benchmark.common import (
     append_jsonl,
     config_fingerprint,
@@ -98,6 +101,13 @@ class CommonTests(unittest.TestCase):
         ):
             self.assertEqual(detect_power()["condition"], "ac_power")
         self.assertEqual(safe_slug("modelo con / espacios"), "modelo_con_espacios")
+
+    def test_subcommand_help_lists_its_real_options(self):
+        output = StringIO()
+        with self.assertRaisesRegex(SystemExit, "0"), redirect_stdout(output):
+            cli_main(["functional", "--help"])
+        self.assertIn("--case-ids", output.getvalue())
+        self.assertIn("--resume", output.getvalue())
 
 
 if __name__ == "__main__":
