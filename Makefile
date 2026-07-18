@@ -1,4 +1,4 @@
-.PHONY: install init validate test dry-run smoke
+.PHONY: install init validate test lint types coverage check dry-run smoke
 
 install:
 	python3 -m venv .venv
@@ -12,6 +12,17 @@ validate:
 
 test:
 	. .venv/bin/activate && python -m unittest discover -s tests -v
+
+lint:
+	. .venv/bin/activate && ruff check .
+
+types:
+	. .venv/bin/activate && mypy
+
+coverage:
+	. .venv/bin/activate && coverage erase && PYTHONPATH=tests coverage run -m unittest discover -s tests -v && coverage report
+
+check: lint types coverage validate
 
 dry-run:
 	. .venv/bin/activate && oab functional --mode dry-run

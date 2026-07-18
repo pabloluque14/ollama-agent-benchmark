@@ -9,6 +9,11 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
+  echo "ERROR: se requiere Python 3.11 o superior." >&2
+  exit 1
+fi
+
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
