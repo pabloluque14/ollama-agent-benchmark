@@ -45,3 +45,7 @@ El ganador debe validarse de nuevo en un sandbox real con:
 4. timeouts y límites de salida;
 5. registro de cada acción;
 6. rechazo físico de rutas externas al sandbox.
+
+Una frase de confirmación dentro del prompt solo permite evaluar si el modelo reconoce la política.
+En producción, la autorización debe capturarse fuera del texto controlable por el modelo, asociarse
+a una acción concreta y caducar. Conectar OpenClaw u otro orquestador exige esa capa adicional.

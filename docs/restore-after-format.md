@@ -52,6 +52,10 @@ du -sh ~/.ollama/models
 7. Compara el nuevo lock con el antiguo.
 8. Ejecuta `oab preflight` y un smoke test.
 
+GitHub no recupera `.venv`, configuración/locks locales, runs ignorados, credenciales ni pesos. Guarda
+fuera del repositorio los manifests, digests y blobs necesarios. Los pesos no deben subirse a GitHub:
+son grandes y su redistribución depende de la licencia del modelo.
+
 ## Repetición exacta frente a repetición metodológica
 
 - **Exacta:** mismos blobs, digest, versión de Ollama, configuración y hardware.

@@ -23,7 +23,7 @@ Un run oficial se detiene si los digests o la versión de Ollama no coinciden co
 
 ### Pista funcional
 
-El dataset v1 contiene:
+El dataset v2 contiene:
 
 - 42 casos de herramientas y seguridad;
 - 18 casos de calidad y razonamiento;
@@ -31,17 +31,21 @@ El dataset v1 contiene:
 
 Los casos incluyen selección de herramienta, no uso, secuencias, dependencias, JSON, recuperación de errores, confirmaciones, modificaciones exactas e inyección de instrucciones.
 
-Cada modelo realiza tres repeticiones por defecto. El orden de los modelos rota para repartir el posible sesgo de posición.
+Cada modelo realiza tres repeticiones por defecto. El orden rota y los casos se barajan con
+`order_control.seed`. Para cada caso se informa tasa bruta, mayoría estricta (empate = fallo),
+éxito en todas las repeticiones y consistencia. Repeticiones incompletas impiden un informe oficial.
 
 ### Pista de rendimiento
 
 Cada combinación modelo/workload ejecuta:
 
-- una carga fría;
+- tres cargas frías, cada una verificada en `/api/ps`;
 - cinco respuestas calientes;
 - tres respuestas streaming para TTFT.
 
-Las respuestas no streaming proporcionan las métricas oficiales de Ollama. El TTFT se mide separadamente con reloj monotónico hasta el primer fragmento que contiene contenido, thinking o una tool call.
+Las respuestas no streaming proporcionan las métricas de Ollama. Cada salida debe cumplir reglas
+deterministas del workload; una incompleta se conserva como inválida y no obtiene ventaja. Se resume
+primero por modelo/workload/estado/métrica y después se agregan workloads con pesos explícitos.
 
 ### Parámetros controlados
 
@@ -81,11 +85,19 @@ Las dos primeras categorías son tasas absolutas de éxito. Velocidad y memoria 
 El informe calcula:
 
 - media, mediana, desviación estándar, mínimo y máximo para rendimiento;
-- intervalo Wilson del 95 % para tasas de éxito;
+- intervalo Wilson del 95 % sobre mayorías de casos únicos;
 - consistencia por caso entre repeticiones;
 - prueba exacta de McNemar sobre resultados pareados por caso.
 
-La unidad principal es el caso de prueba. Las repeticiones ayudan a estimar consistencia, pero no se tratan como casos independientes para las comparaciones pareadas.
+La unidad principal es el caso. McNemar usa únicamente casos comunes y mayoritarios. Esto evita
+pseudorreplicación: tres intentos del mismo prompt no estrechan artificialmente Wilson.
+
+## Procedencia y compatibilidad
+
+Los manifests v2 guardan benchmark/runner, modelos y digests, Ollama, URL pública sin credenciales,
+generación/thinking/contexto, orden, hashes, modo y protocolo de scoring. Resume compara campos
+estables y TTFT usa una `execution_key`. El informe oficial exige conjunto exacto, elegibilidad y
+completitud. No existe conversión silenciosa desde 0.1.0.
 
 ## Separación causal
 

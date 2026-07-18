@@ -60,11 +60,12 @@ Se captura antes y después de cada ejecución en macOS. Un aumento sostenido pu
 
 ## Puntuación de velocidad
 
-Componentes iniciales:
+Componentes v0.2.0:
 
-- generation tok/s: 45 %;
+- generation tok/s: 35 %;
 - prompt tok/s: 20 %;
-- latencia caliente: 20 %;
+- latencia caliente: 15 %;
+- TTFT: 15 %;
 - carga fría: 15 %.
 
 Los componentes se expresan en relación con el mejor modelo del mismo run.
@@ -88,8 +89,19 @@ Compara dos modelos sobre los mismos casos. Solo cuentan los casos discordantes:
 - A supera y B falla;
 - A falla y B supera.
 
-Un promedio superior no garantiza una diferencia consistente. McNemar ayuda a distinguir una ventaja repetida de una diferencia producida por pocos casos.
+Un promedio superior no garantiza una diferencia consistente. McNemar se calcula sobre la mayoría
+estricta de cada caso común; un empate se considera fallo.
 
 ## Consistencia
 
 Se informa cuántos casos fueron superados en todas las repeticiones. Un modelo con 90 % de media pero resultados cambiantes puede ser menos adecuado para un agente que otro con una media ligeramente inferior y comportamiento estable.
+
+## Cumplimiento y datos ausentes
+
+Los workloads pueden exigir tokens mínimos, contenido, regex o estructura. Un fallo se conserva y
+se excluye de la métrica válida sin ocultarlo. `None` se presenta como `N/D`: nunca se transforma en
+swap cero, memoria cero, TTFT instantáneo ni score perfecto. La política inicial declara el score
+incompleto; no renormaliza categorías arbitrariamente.
+
+Los valores de velocidad/memoria son relativos al mejor del mismo conjunto de modelos. Las métricas
+brutas por workload permanecen en JSON/CSV y deben acompañar cualquier comparación.

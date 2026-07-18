@@ -16,6 +16,9 @@ Edita `config/benchmark.json`:
 
 El orden se usa como punto inicial. El runner lo rota entre repeticiones.
 
+`order_control.seed` controla el barajado de casos. `speed_weights` y `workload_weights` deben sumar
+1.0. Tres cargas frías son el valor oficial predeterminado; reducirlas cambia el experimento.
+
 ## Requisitos
 
 Cada nombre debe aparecer exactamente en:
@@ -72,3 +75,6 @@ El contexto inicial de 8192 tokens reduce el riesgo de presión de memoria en eq
 ## Thinking
 
 No mezcles runs con `think: false` y `think: true`. Copia la configuración y utiliza identificadores de run diferentes.
+
+La URL `ollama.base_url` es obligatoria y debe ser localhost. Lock, preflight, runners, snapshots y
+descarga utilizan exactamente esa URL.

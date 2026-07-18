@@ -11,7 +11,7 @@ Características:
 - contexto inicial de 8192 tokens;
 - paralelismo asumido de 1;
 - thinking desactivado;
-- una carga fría y cinco calientes;
+- tres cargas frías verificadas y cinco calientes;
 - 60 casos funcionales con tres repeticiones;
 - benchmark oficial únicamente conectado a corriente.
 

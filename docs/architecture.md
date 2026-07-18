@@ -17,10 +17,10 @@ init → lock → validate → preflight → functional → performance → repo
 
 ### Dataset
 
-- `benchmark_cases_v1.json`: 60 casos y reglas de evaluación.
-- `fixtures_v1.json`: archivos y documentos virtuales.
-- `tools_v1.json`: esquemas JSON de las seis herramientas.
-- `performance_workloads_v1.json`: cargas sintéticas de rendimiento.
+- `benchmark_cases_v2.json`: 60 casos y matchers deterministas auditables.
+- `fixtures_v2.json`: archivos y documentos virtuales.
+- `tools_v2.json`: esquemas JSON de las seis herramientas.
+- `performance_workloads_v2.json`: cargas y reglas de cumplimiento.
 
 ### Runner funcional
 
@@ -44,6 +44,14 @@ Separa:
 ### Informe
 
 Combina los dos runs y genera JSON, CSV, Markdown y SVG sin dependencias externas.
+Antes compara manifests v2 completos. Los pesos proceden del experimento guardado, no de la
+configuración presente al informar.
+
+### Infraestructura común y pruebas
+
+`common.py` centraliza JSON/JSONL atómico, HTTP, URL, plataforma, alimentación, snapshots,
+descarga, métricas, lock, timestamps y hashes. `tests/fake_ollama.py` implementa los endpoints
+necesarios mediante la biblioteca estándar; CI nunca utiliza Ollama real.
 
 ## Formatos
 
