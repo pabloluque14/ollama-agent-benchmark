@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import hashlib
 import json
@@ -12,7 +13,9 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 
 def project_root() -> pathlib.Path:
@@ -26,10 +29,12 @@ ROOT = project_root()
 CONFIG_PATH = ROOT / "config" / "benchmark.json"
 LOCK_PATH = ROOT / "config" / "models.lock.json"
 API_DEFAULT = "http://127.0.0.1:11434"
+BENCHMARK_VERSION = "0.2.0"
+SCHEMA_VERSION = 2
 
 
 def utc_now() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 def read_json(path: pathlib.Path) -> Any:
@@ -74,17 +79,31 @@ def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def config_fingerprint(value: Any) -> str:
+    """Hash canónico de una estructura JSON."""
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return sha256_text(encoded)
+
+
+def public_base_url(value: str) -> str:
+    """Conserva solo esquema/host/puerto/ruta, nunca credenciales ni query."""
+    parts = urlsplit(value)
+    host = parts.hostname or ""
+    port = f":{parts.port}" if parts.port else ""
+    return urlunsplit((parts.scheme, host + port, parts.path.rstrip("/"), "", ""))
+
+
 def api_base(config: dict[str, Any]) -> str:
-    return str(config.get("ollama", {}).get("base_url", API_DEFAULT)).rstrip("/")
+    return str(config["ollama"]["base_url"]).rstrip("/")
 
 
-def get_json(url: str, timeout: int = 30) -> dict[str, Any]:
+def get_json(url: str, timeout: float = 30) -> dict[str, Any]:
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
 
 
-def post_json(url: str, payload: dict[str, Any], timeout: int = 900) -> dict[str, Any]:
+def post_json(url: str, payload: dict[str, Any], timeout: float = 900) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
@@ -166,14 +185,12 @@ def system_snapshot(base_url: str | None = None) -> dict[str, Any]:
 
 
 def unload_model(model: str, base_url: str) -> None:
-    try:
+    with contextlib.suppress(Exception):
         post_json(
             base_url.rstrip("/") + "/api/generate",
             {"model": model, "stream": False, "keep_alive": 0},
             timeout=300,
         )
-    except Exception:
-        pass
 
 
 def load_config(path: pathlib.Path = CONFIG_PATH) -> dict[str, Any]:
@@ -182,8 +199,20 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> dict[str, Any]:
             f"No existe {path}. Copia config/benchmark.example.json a config/benchmark.json."
         )
     config = read_json(path)
+    if not isinstance(config, dict):
+        raise ValueError("La configuración debe ser un objeto JSON")
+    if config.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(
+            f"config.schema_version debe ser {SCHEMA_VERSION}; los formatos 0.1.0 no son compatibles"
+        )
+    if config.get("benchmark_version") != BENCHMARK_VERSION:
+        raise ValueError(f"config.benchmark_version debe ser {BENCHMARK_VERSION}")
     models = config.get("models")
-    if not isinstance(models, list) or not models or not all(isinstance(x, str) and x for x in models):
+    if (
+        not isinstance(models, list)
+        or not models
+        or not all(isinstance(x, str) and x for x in models)
+    ):
         raise ValueError("config.models debe ser una lista no vacía de nombres de Ollama")
     weights = config.get("weights", {})
     expected = {"tool_reliability", "quality_reasoning", "speed", "memory_stability"}
@@ -191,13 +220,94 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> dict[str, Any]:
         raise ValueError(f"config.weights debe contener exactamente: {sorted(expected)}")
     if abs(sum(float(v) for v in weights.values()) - 1.0) > 1e-12:
         raise ValueError("Las ponderaciones deben sumar 1.0")
+    if any(
+        not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 for v in weights.values()
+    ):
+        raise ValueError("config.weights solo admite números no negativos")
+
+    ollama = config.get("ollama")
+    if not isinstance(ollama, dict) or not isinstance(ollama.get("base_url"), str):
+        raise ValueError("config.ollama.base_url es obligatorio y debe ser texto")
+    base = ollama["base_url"].rstrip("/")
+    if not ensure_localhost(base):
+        raise ValueError("config.ollama.base_url debe apuntar a localhost por seguridad")
+
+    generation = config.get("generation")
+    if not isinstance(generation, dict):
+        raise ValueError("config.generation es obligatorio")
+    for key in ("num_ctx", "seed", "top_k", "num_predict"):
+        if not isinstance(generation.get(key), int) or isinstance(generation.get(key), bool):
+            raise ValueError(f"config.generation.{key} debe ser un entero")
+    if generation["num_ctx"] < 1 or generation["num_predict"] < 1:
+        raise ValueError("config.generation.num_ctx y num_predict deben ser positivos")
+
+    order = config.get("order_control")
+    if not isinstance(order, dict) or "seed" not in order:
+        raise ValueError("config.order_control.seed es obligatorio")
+    if not isinstance(order["seed"], int) or isinstance(order["seed"], bool):
+        raise ValueError("config.order_control.seed debe ser un entero")
+
+    functional = config.get("functional")
+    performance = config.get("performance")
+    if not isinstance(functional, dict) or not isinstance(performance, dict):
+        raise ValueError("config.functional y config.performance son obligatorios")
+    for section, keys in (
+        (functional, ("repetitions", "max_turns")),
+        (performance, ("cold_runs", "hot_runs", "ttft_runs")),
+    ):
+        for key in keys:
+            if (
+                not isinstance(section.get(key), int)
+                or isinstance(section.get(key), bool)
+                or section[key] < 1
+            ):
+                raise ValueError(f"El contador {key} debe ser un entero positivo")
+
+    speed = config.get("speed_weights")
+    speed_expected = {"generation", "prompt", "hot_latency", "ttft", "cold_load"}
+    if not isinstance(speed, dict) or set(speed) != speed_expected:
+        raise ValueError(
+            f"config.speed_weights debe contener exactamente: {sorted(speed_expected)}"
+        )
+    if any(not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 for v in speed.values()):
+        raise ValueError("config.speed_weights solo admite números no negativos")
+    if abs(sum(float(v) for v in speed.values()) - 1.0) > 1e-12:
+        raise ValueError("config.speed_weights debe sumar 1.0")
+
+    workload_weights = config.get("workload_weights")
+    if not isinstance(workload_weights, dict) or not workload_weights:
+        raise ValueError("config.workload_weights debe ser un objeto no vacío")
+    if any(
+        not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0
+        for v in workload_weights.values()
+    ):
+        raise ValueError("config.workload_weights solo admite pesos positivos")
+    if abs(sum(float(v) for v in workload_weights.values()) - 1.0) > 1e-12:
+        raise ValueError("config.workload_weights debe sumar 1.0")
+    if config.get("missing_metric_policy") != "incomplete_score":
+        raise ValueError("config.missing_metric_policy debe ser 'incomplete_score'")
     return config
+
+
+def validate_manifest_compatibility(
+    existing: dict[str, Any], requested: dict[str, Any], stable_fields: Iterable[str]
+) -> None:
+    mismatches = [field for field in stable_fields if existing.get(field) != requested.get(field)]
+    if mismatches:
+        raise ValueError("Manifest incompatible; campos distintos: " + ", ".join(mismatches))
 
 
 def verify_lock(config: dict[str, Any], lock_path: pathlib.Path = LOCK_PATH) -> dict[str, Any]:
     if not lock_path.is_file():
         raise FileNotFoundError(f"No existe {lock_path}. Ejecuta: oab lock")
     lock = read_json(lock_path)
+    if (
+        lock.get("schema_version") != SCHEMA_VERSION
+        or lock.get("benchmark_version") != BENCHMARK_VERSION
+    ):
+        raise ValueError(
+            "El lock pertenece a 0.1.0 o a un formato incompatible; regénéralo con oab lock --force"
+        )
     locked_names = [item.get("name") for item in lock.get("models", [])]
     if locked_names != config.get("models"):
         raise ValueError(
@@ -205,6 +315,8 @@ def verify_lock(config: dict[str, Any], lock_path: pathlib.Path = LOCK_PATH) -> 
             "Regenera el lock con: oab lock --force"
         )
     base = api_base(config)
+    if lock.get("ollama_base_url") != public_base_url(base):
+        raise ValueError("La URL de Ollama no coincide con la usada para crear el lock")
     version = get_json(base + "/api/version", timeout=10)
     tags = get_json(base + "/api/tags", timeout=30)
     actual = {item.get("name"): item.get("digest") for item in tags.get("models", [])}
@@ -262,7 +374,7 @@ def metric_rates(response: dict[str, Any]) -> dict[str, Any]:
 
 
 def rotate_models(models: list[str], repetitions: int) -> list[list[str]]:
-    return [models[i % len(models):] + models[: i % len(models)] for i in range(repetitions)]
+    return [models[i % len(models) :] + models[: i % len(models)] for i in range(repetitions)]
 
 
 def wait_until_unloaded(model: str, base_url: str, timeout: float = 30.0) -> bool:

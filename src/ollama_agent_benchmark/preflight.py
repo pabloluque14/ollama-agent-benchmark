@@ -2,14 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import pathlib
 import platform
 import shutil
-import socket
-import sys
 from dataclasses import dataclass
-from typing import Any
 
 from .common import (
     CONFIG_PATH,
@@ -19,7 +15,6 @@ from .common import (
     ensure_localhost,
     get_json,
     load_config,
-    model_ps_snapshot,
     parse_swap_used_bytes,
     run_command,
     sha256_file,
@@ -61,7 +56,11 @@ def run_preflight(
         add("ERROR", "CLI de Ollama", "No se encuentra ollama en PATH")
     else:
         version_cli = run_command(["ollama", "--version"])
-        add("OK" if version_cli.get("returncode") == 0 else "AVISO", "CLI de Ollama", str(version_cli.get("stdout", "")).strip())
+        add(
+            "OK" if version_cli.get("returncode") == 0 else "AVISO",
+            "CLI de Ollama",
+            str(version_cli.get("stdout", "")).strip(),
+        )
 
     try:
         lock = verify_lock(config, lock_path)
@@ -75,7 +74,11 @@ def run_preflight(
     try:
         ps_data = get_json(base + "/api/ps", timeout=10)
         running = [item.get("name") for item in ps_data.get("models", [])]
-        add("AVISO" if running else "OK", "Modelos cargados", ", ".join(running) if running else "Ninguno")
+        add(
+            "AVISO" if running else "OK",
+            "Modelos cargados",
+            ", ".join(running) if running else "Ninguno",
+        )
     except Exception as exc:
         add("ERROR", "Estado de Ollama", str(exc))
 
@@ -91,9 +94,17 @@ def run_preflight(
         thermal = run_command(["pmset", "-g", "therm"])
         text = str(thermal.get("stdout", "")).strip().replace("\n", " | ")
         warning_terms = ("CPU_Scheduler_Limit", "CPU_Available_CPUs", "CPU_Speed_Limit")
-        add("AVISO" if any(term in text for term in warning_terms) else "OK", "Estado térmico", text or "Sin datos")
+        add(
+            "AVISO" if any(term in text for term in warning_terms) else "OK",
+            "Estado térmico",
+            text or "Sin datos",
+        )
         swap = parse_swap_used_bytes()
-        add("INFO", "Swap usado", f"{swap / 1024**2:.2f} MiB" if swap is not None else "No disponible")
+        add(
+            "INFO",
+            "Swap usado",
+            f"{swap / 1024**2:.2f} MiB" if swap is not None else "No disponible",
+        )
 
     usage = shutil.disk_usage(config_path.parent)
     free_gib = usage.free / 1024**3
@@ -101,9 +112,9 @@ def run_preflight(
 
     for path in (
         config_path,
-        pathlib.Path(__file__).resolve().parents[2] / "datasets" / "benchmark_cases_v1.json",
-        pathlib.Path(__file__).resolve().parents[2] / "datasets" / "fixtures_v1.json",
-        pathlib.Path(__file__).resolve().parents[2] / "datasets" / "tools_v1.json",
+        pathlib.Path(__file__).resolve().parents[2] / "datasets" / "benchmark_cases_v2.json",
+        pathlib.Path(__file__).resolve().parents[2] / "datasets" / "fixtures_v2.json",
+        pathlib.Path(__file__).resolve().parents[2] / "datasets" / "tools_v2.json",
     ):
         if path.is_file():
             add("OK", f"Artefacto {path.name}", sha256_file(path))
@@ -114,7 +125,9 @@ def run_preflight(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Comprueba seguridad, identidad de modelos y condiciones del sistema.")
+    parser = argparse.ArgumentParser(
+        description="Comprueba seguridad, identidad de modelos y condiciones del sistema."
+    )
     parser.add_argument("--config", type=pathlib.Path, default=CONFIG_PATH)
     parser.add_argument("--lock", type=pathlib.Path, default=LOCK_PATH)
     parser.add_argument("--require-ac", action="store_true")

@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import json
 import pathlib
 import sys
 from typing import Any
 
-from .common import CONFIG_PATH, LOCK_PATH, api_base, get_json, load_config, post_json, sha256_text, write_json_atomic
+from .common import (
+    BENCHMARK_VERSION,
+    CONFIG_PATH,
+    LOCK_PATH,
+    SCHEMA_VERSION,
+    api_base,
+    get_json,
+    load_config,
+    post_json,
+    public_base_url,
+    sha256_text,
+    write_json_atomic,
+)
 
 
 def architecture_metadata(model_info: dict[str, Any]) -> dict[str, Any]:
@@ -63,9 +74,10 @@ def create_lock(
         )
 
     document = {
-        "schema_version": 1,
-        "created_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
-        "ollama_base_url": base,
+        "schema_version": SCHEMA_VERSION,
+        "benchmark_version": BENCHMARK_VERSION,
+        "created_at_utc": dt.datetime.now(dt.UTC).isoformat(),
+        "ollama_base_url": public_base_url(base),
         "ollama_server_version": version.get("version"),
         "models": locked,
     }
@@ -78,7 +90,9 @@ def create_lock(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Fija digests y metadatos exactos de los modelos instalados.")
+    parser = argparse.ArgumentParser(
+        description="Fija digests y metadatos exactos de los modelos instalados."
+    )
     parser.add_argument("--config", type=pathlib.Path, default=CONFIG_PATH)
     parser.add_argument("--output", type=pathlib.Path, default=LOCK_PATH)
     parser.add_argument("--force", action="store_true")

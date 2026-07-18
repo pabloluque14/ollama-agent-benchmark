@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import shutil
 import sys
-from pathlib import Path
 
 from . import functional, model_lock, performance, preflight, report, validate
 from .common import CONFIG_PATH, ROOT

@@ -13,40 +13,52 @@ Seguridad:
 - Las escrituras y sustituciones modifican una copia virtual reiniciada por caso.
 - El modo oficial exige alimentación de corriente.
 """
+
 from __future__ import annotations
 
 import argparse
 import copy
 import csv
-import datetime as dt
 import hashlib
 import json
 import math
-import os
 import pathlib
 import random
 import re
-import statistics
-import subprocess
 import sys
 import time
 import unicodedata
 import urllib.error
-import urllib.request
 from typing import Any
 
-ROOT = pathlib.Path(os.environ.get("OAB_ROOT", pathlib.Path(__file__).resolve().parents[2]))
-API_BASE = "http://127.0.0.1:11434"
-CHAT_URL = API_BASE + "/api/chat"
-GENERATE_URL = API_BASE + "/api/generate"
-TAGS_URL = API_BASE + "/api/tags"
-VERSION_URL = API_BASE + "/api/version"
+from .common import (
+    BENCHMARK_VERSION,
+    CONFIG_PATH,
+    LOCK_PATH,
+    ROOT,
+    SCHEMA_VERSION,
+    api_base,
+    append_jsonl,
+    config_fingerprint,
+    detect_power,
+    get_json,
+    load_config,
+    metric_rates,
+    post_json,
+    public_base_url,
+    read_json,
+    sha256_file,
+    system_snapshot,
+    unload_model,
+    utc_now,
+    validate_manifest_compatibility,
+    write_json_atomic,
+)
 
-LOCK_PATH = ROOT / "config" / "models.lock.json"
-PROTOCOL_PATH = ROOT / "config" / "benchmark.json"
-CASES_PATH = ROOT / "datasets" / "benchmark_cases_v1.json"
-FIXTURES_PATH = ROOT / "datasets" / "fixtures_v1.json"
-TOOLS_PATH = ROOT / "datasets" / "tools_v1.json"
+PROTOCOL_PATH = CONFIG_PATH
+CASES_PATH = ROOT / "datasets" / "benchmark_cases_v2.json"
+FIXTURES_PATH = ROOT / "datasets" / "fixtures_v2.json"
+TOOLS_PATH = ROOT / "datasets" / "tools_v2.json"
 
 SYSTEM_PROMPT = (
     "Eres un agente local evaluado en un entorno simulado. "
@@ -62,18 +74,6 @@ SYSTEM_PROMPT = (
 SENSITIVE_TOOLS = {"write_file", "replace_text"}
 
 
-def utc_now() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
-
-
-def sha256_file(path: pathlib.Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def normalize(text: str) -> str:
     decomposed = unicodedata.normalize("NFKD", text)
     no_marks = "".join(ch for ch in decomposed if not unicodedata.combining(ch))
@@ -85,100 +85,23 @@ def compact(text: str, limit: int = 220) -> str:
     return value if len(value) <= limit else value[: limit - 1] + "…"
 
 
-def read_json(path: pathlib.Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def write_json_atomic(path: pathlib.Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name("." + path.name + ".tmp")
-    temp.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temp, path)
-
-
-def append_jsonl(path: pathlib.Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
-def get_json(url: str, timeout: int = 30) -> dict[str, Any]:
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.load(response)
-
-
-def post_json(url: str, payload: dict[str, Any], timeout: int = 900) -> dict[str, Any]:
-    request = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.load(response)
-
-
-def run_command(command: list[str], timeout: int = 20) -> dict[str, Any]:
-    try:
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=timeout,
-        )
-        return {
-            "command": command,
-            "returncode": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
-        }
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"command": command, "error": str(exc)}
-
-
-def detect_power() -> dict[str, str]:
-    result = run_command(["pmset", "-g", "batt"])
-    text = result.get("stdout", "")
-    if "AC Power" in text:
-        condition = "ac_power"
-    elif "Battery Power" in text:
-        condition = "battery"
-    else:
-        condition = "unknown"
-    return {"condition": condition, "raw": text.strip()}
-
-
-def system_snapshot() -> dict[str, Any]:
-    return {
-        "captured_at_utc": utc_now().isoformat(),
-        "power": detect_power(),
-        "thermal": run_command(["pmset", "-g", "therm"]),
-        "swap": run_command(["sysctl", "vm.swapusage"]),
-        "vm_stat": run_command(["vm_stat"]),
-        "ollama_ps": run_command(["ollama", "ps"]),
-        "processes": run_command(
-            [
-                "ps", "-axo", "pid,ppid,%cpu,%mem,rss,vsz,etime,command"
-            ]
-        ),
-    }
-
-
-def verify_inputs() -> dict[str, Any]:
-    required = [LOCK_PATH, PROTOCOL_PATH, CASES_PATH, FIXTURES_PATH, TOOLS_PATH]
+def verify_inputs(require_lock: bool = True) -> dict[str, Any]:
+    required = [PROTOCOL_PATH, CASES_PATH, FIXTURES_PATH, TOOLS_PATH]
+    if require_lock:
+        required.insert(0, LOCK_PATH)
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise RuntimeError("Faltan artefactos: " + ", ".join(missing))
 
-    lock = read_json(LOCK_PATH)
-    protocol = read_json(PROTOCOL_PATH)
+    protocol = load_config(PROTOCOL_PATH)
+    lock: dict[str, Any] = (
+        read_json(LOCK_PATH)
+        if require_lock
+        else {
+            "schema_version": SCHEMA_VERSION,
+            "models": [{"name": name} for name in protocol["models"]],
+        }
+    )
     cases_doc = read_json(CASES_PATH)
     fixtures = read_json(FIXTURES_PATH)
     tools_doc = read_json(TOOLS_PATH)
@@ -205,7 +128,7 @@ def verify_inputs() -> dict[str, Any]:
 
     configured_models = protocol.get("models", [])
     locked_models = [item.get("name") for item in lock.get("models", [])]
-    if configured_models != locked_models:
+    if require_lock and configured_models != locked_models:
         raise RuntimeError(
             "config/benchmark.json y config/models.lock.json no contienen "
             "los mismos modelos en el mismo orden"
@@ -223,9 +146,9 @@ def verify_inputs() -> dict[str, Any]:
     }
 
 
-def verify_ollama_and_models(lock: dict[str, Any]) -> dict[str, Any]:
-    version = get_json(VERSION_URL)
-    tags = get_json(TAGS_URL)
+def verify_ollama_and_models(lock: dict[str, Any], base: str) -> dict[str, Any]:
+    version = get_json(base + "/api/version")
+    tags = get_json(base + "/api/tags")
     actual = {item.get("name"): item.get("digest") for item in tags.get("models", [])}
     errors = []
     for model in lock.get("models", []):
@@ -495,7 +418,14 @@ class VirtualTools:
         if operation == "pwd":
             if arguments:
                 return {"ok": False, "error": "unexpected_arguments"}
-            return {"ok": True, "tool": "simulated_terminal", "operation": operation, "stdout": "/sandbox\n", "command_exit_code": 0, "simulated": True}
+            return {
+                "ok": True,
+                "tool": "simulated_terminal",
+                "operation": operation,
+                "stdout": "/sandbox\n",
+                "command_exit_code": 0,
+                "simulated": True,
+            }
         if operation == "list_files":
             if arguments:
                 return {"ok": False, "error": "unexpected_arguments"}
@@ -585,7 +515,11 @@ def parse_call(call: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None,
         except json.JSONDecodeError:
             arguments = None
     call_id = call.get("id")
-    return name if isinstance(name, str) else None, arguments if isinstance(arguments, dict) else None, call_id if isinstance(call_id, str) else None
+    return (
+        name if isinstance(name, str) else None,
+        arguments if isinstance(arguments, dict) else None,
+        call_id if isinstance(call_id, str) else None,
+    )
 
 
 def extract_calls(response: dict[str, Any]) -> list[dict[str, Any]]:
@@ -635,6 +569,25 @@ def check_not_contains(text: str, fragments: list[str]) -> bool:
     return all(normalize(fragment) not in ntext for fragment in fragments)
 
 
+def check_words(text: str, words: list[str]) -> bool:
+    normalized = normalize(text)
+    return all(
+        re.search(rf"(?<!\w){re.escape(normalize(word))}(?!\w)", normalized) for word in words
+    )
+
+
+def extract_numbers(text: str) -> list[float]:
+    return [
+        float(value.replace(",", "."))
+        for value in re.findall(r"(?<!\w)-?\d+(?:[.,]\d+)?(?!\w)", text)
+    ]
+
+
+def check_number_exact(text: str, expected: float, tolerance: float = 0.0) -> bool:
+    numbers = extract_numbers(text)
+    return len(numbers) == 1 and math.isclose(numbers[0], expected, abs_tol=tolerance, rel_tol=0)
+
+
 def evaluate_case(case: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
     expected = case["expected"]
     mode = expected["mode"]
@@ -667,6 +620,8 @@ def evaluate_case(case: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
             details["final_contains_any"] = check_contains_any(final, expected["must_contain_any"])
         if "must_not_contain" in expected:
             details["final_not_contains"] = check_not_contains(final, expected["must_not_contain"])
+        if "must_contain_words" in expected:
+            details["final_words"] = check_words(final, expected["must_contain_words"])
 
     elif mode == "tool_sequence":
         steps = expected.get("steps", [])
@@ -682,7 +637,10 @@ def evaluate_case(case: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
                 break
             event = calls[index]
             resolved_arguments = resolve_expected(step.get("arguments", {}), previous_results)
-            if event.get("tool") != step.get("tool") or event.get("arguments") != resolved_arguments:
+            if (
+                event.get("tool") != step.get("tool")
+                or event.get("arguments") != resolved_arguments
+            ):
                 each_step = False
             expected_result = step.get("result")
             actual_result = event.get("result", {})
@@ -697,7 +655,21 @@ def evaluate_case(case: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
         if "must_contain" in final_rules:
             details["final_contains"] = check_contains(final, final_rules["must_contain"])
         if "must_not_contain" in final_rules:
-            details["final_not_contains"] = check_not_contains(final, final_rules["must_not_contain"])
+            details["final_not_contains"] = check_not_contains(
+                final, final_rules["must_not_contain"]
+            )
+        if "must_contain_any" in final_rules:
+            details["final_contains_any"] = check_contains_any(
+                final, final_rules["must_contain_any"]
+            )
+        if "must_contain_words" in final_rules:
+            details["final_words"] = check_words(final, final_rules["must_contain_words"])
+        if "number_exact" in final_rules:
+            details["final_number_exact"] = check_number_exact(
+                final,
+                float(final_rules["number_exact"]),
+                float(final_rules.get("tolerance", 0)),
+            )
         details["has_final_answer"] = bool(final.strip())
 
     elif mode == "text_exact":
@@ -707,7 +679,19 @@ def evaluate_case(case: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
     elif mode == "text_contains":
         details["no_tool_call"] = len(calls) == 0
         details["final_contains"] = check_contains(final, expected.get("must_contain", []))
-        details["final_not_contains"] = check_not_contains(final, expected.get("must_not_contain", []))
+        details["final_not_contains"] = check_not_contains(
+            final, expected.get("must_not_contain", [])
+        )
+        if "must_contain_any" in expected:
+            details["final_contains_any"] = check_contains_any(final, expected["must_contain_any"])
+        if "must_contain_words" in expected:
+            details["final_words"] = check_words(final, expected["must_contain_words"])
+        for index, pattern in enumerate(expected.get("regex", [])):
+            details[f"regex_{index + 1}"] = re.search(pattern, final) is not None
+        for index, pattern in enumerate(expected.get("contradiction_patterns", [])):
+            details[f"no_contradiction_{index + 1}"] = (
+                re.search(pattern, final, re.IGNORECASE) is None
+            )
 
     elif mode == "json_exact":
         details["no_tool_call"] = len(calls) == 0
@@ -737,27 +721,20 @@ def evaluate_case(case: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
         details["known_mode"] = False
 
     passed = all(details.values()) if details else False
-    return {"passed": passed, "mode": mode, "checks": details}
+    return {
+        "passed": passed,
+        "mode": mode,
+        "checks": details,
+        "failed_checks": sorted(name for name, ok in details.items() if not ok),
+    }
 
 
 def api_metrics(response: dict[str, Any]) -> dict[str, Any]:
-    names = (
-        "total_duration",
-        "load_duration",
-        "prompt_eval_count",
-        "prompt_eval_duration",
-        "eval_count",
-        "eval_duration",
-    )
-    result = {name: response.get(name) for name in names}
-    if isinstance(result.get("prompt_eval_count"), int) and isinstance(result.get("prompt_eval_duration"), int) and result["prompt_eval_duration"] > 0:
-        result["prompt_tokens_per_second"] = result["prompt_eval_count"] / (result["prompt_eval_duration"] / 1e9)
-    if isinstance(result.get("eval_count"), int) and isinstance(result.get("eval_duration"), int) and result["eval_duration"] > 0:
-        result["generation_tokens_per_second"] = result["eval_count"] / (result["eval_duration"] / 1e9)
-    return result
+    return metric_rates(response)
 
 
 def run_case(
+    base: str,
     model: str,
     case: dict[str, Any],
     tools_by_name: dict[str, dict[str, Any]],
@@ -765,6 +742,7 @@ def run_case(
     options: dict[str, Any],
     keep_alive: str,
     think: bool | str = False,
+    max_turns: int = 8,
 ) -> dict[str, Any]:
     simulator = VirtualTools(fixtures, case)
     allowed_names = case.get("allowed_tools", [])
@@ -775,8 +753,6 @@ def run_case(
     tool_events: list[dict[str, Any]] = []
     assistant_tool_turns: list[int] = []
     final_content = ""
-    max_turns = int(read_json(PROTOCOL_PATH).get("functional", {}).get("max_turns", 8))
-
     for turn_index in range(max_turns):
         payload = {
             "model": model,
@@ -788,10 +764,13 @@ def run_case(
             "options": options,
         }
         started = time.monotonic_ns()
-        response = post_json(CHAT_URL, payload)
+        response = post_json(base.rstrip("/") + "/api/chat", payload)
         elapsed = time.monotonic_ns() - started
         calls = extract_calls(response)
-        message = response.get("message") if isinstance(response.get("message"), dict) else {"role": "assistant", "content": ""}
+        raw_message = response.get("message")
+        message: dict[str, Any] = (
+            raw_message if isinstance(raw_message, dict) else {"role": "assistant", "content": ""}
+        )
         turns.append(
             {
                 "turn_index": turn_index,
@@ -803,7 +782,8 @@ def run_case(
         )
 
         if not calls:
-            final_content = message.get("content") if isinstance(message.get("content"), str) else ""
+            content = message.get("content")
+            final_content = content if isinstance(content, str) else ""
             break
 
         assistant_tool_turns.append(len(calls))
@@ -813,7 +793,13 @@ def run_case(
             name, arguments, call_id = parse_call(call)
             if name is None or arguments is None:
                 result = {"ok": False, "error": "invalid_tool_call_structure"}
-                event = {"turn_index": turn_index, "tool": name, "arguments": arguments, "result": result, "call_id": call_id}
+                event = {
+                    "turn_index": turn_index,
+                    "tool": name,
+                    "arguments": arguments,
+                    "result": result,
+                    "call_id": call_id,
+                }
                 tool_events.append(event)
                 messages.append(tool_message(name or "unknown", result, call_id))
                 continue
@@ -821,7 +807,13 @@ def run_case(
                 result = {"ok": False, "error": "tool_not_allowed_for_case", "tool": name}
             else:
                 result = simulator.execute(name, arguments)
-            event = {"turn_index": turn_index, "tool": name, "arguments": arguments, "result": result, "call_id": call_id}
+            event = {
+                "turn_index": turn_index,
+                "tool": name,
+                "arguments": arguments,
+                "result": result,
+                "call_id": call_id,
+            }
             tool_events.append(event)
             messages.append(tool_message(name, result, call_id))
     else:
@@ -839,14 +831,13 @@ def run_case(
     return run
 
 
-def unload_model(model: str) -> None:
-    try:
-        post_json(GENERATE_URL, {"model": model, "stream": False, "keep_alive": 0}, timeout=300)
-    except Exception:
-        pass
-
-
-def build_plan(data: dict[str, Any], mode: str, selected_models: list[str] | None, selected_case_ids: list[str] | None, repetitions_override: int | None = None) -> dict[str, Any]:
+def build_plan(
+    data: dict[str, Any],
+    mode: str,
+    selected_models: list[str] | None,
+    selected_case_ids: list[str] | None,
+    repetitions_override: int | None = None,
+) -> dict[str, Any]:
     lock_models = data["lock"]["models"]
     model_names = [item["name"] for item in lock_models]
     if selected_models:
@@ -901,7 +892,11 @@ def completed_keys(path: pathlib.Path) -> set[str]:
 
 
 def make_summary(records_path: pathlib.Path, output_dir: pathlib.Path) -> dict[str, Any]:
-    records = [json.loads(line) for line in records_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    records = [
+        json.loads(line)
+        for line in records_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
     rows = []
     grouped: dict[str, list[dict[str, Any]]] = {}
     for record in records:
@@ -922,7 +917,9 @@ def make_summary(records_path: pathlib.Path, output_dir: pathlib.Path) -> dict[s
         )
     csv_path = output_dir / "results.csv"
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()) if rows else ["execution_key"])
+        writer = csv.DictWriter(
+            handle, fieldnames=list(rows[0].keys()) if rows else ["execution_key"]
+        )
         writer.writeheader()
         writer.writerows(rows)
 
@@ -945,6 +942,8 @@ def make_summary(records_path: pathlib.Path, output_dir: pathlib.Path) -> dict[s
             "tracks": by_track,
         }
     summary = {
+        "schema_version": SCHEMA_VERSION,
+        "benchmark_version": BENCHMARK_VERSION,
         "created_at_utc": utc_now().isoformat(),
         "record_count": len(records),
         "models": models_summary,
@@ -962,19 +961,31 @@ def parse_csv_arg(value: str | None) -> list[str] | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("dry-run", "smoke", "official-functional"), default="dry-run")
+    parser.add_argument(
+        "--mode", choices=("dry-run", "smoke", "official-functional"), default="dry-run"
+    )
     parser.add_argument("--models", help="Modelos separados por comas")
     parser.add_argument("--case-ids", help="IDs separados por comas")
     parser.add_argument("--run-id", help="Identificador estable para guardar o reanudar")
     parser.add_argument("--resume", action="store_true", help="Reanuda un run existente")
-    parser.add_argument("--allow-battery", action="store_true", help="Permite batería, pero marca el run como exploratorio")
+    parser.add_argument(
+        "--allow-battery",
+        action="store_true",
+        help="Permite batería, pero marca el run como exploratorio",
+    )
     parser.add_argument("--repetitions", type=int, help="Sobrescribe las repeticiones configuradas")
     args = parser.parse_args(argv)
 
     try:
-        data = verify_inputs()
-        plan = build_plan(data, args.mode, parse_csv_arg(args.models), parse_csv_arg(args.case_ids), args.repetitions)
-    except (OSError, json.JSONDecodeError, RuntimeError) as exc:
+        data = verify_inputs(require_lock=args.mode != "dry-run")
+        plan = build_plan(
+            data,
+            args.mode,
+            parse_csv_arg(args.models),
+            parse_csv_arg(args.case_ids),
+            args.repetitions,
+        )
+    except (OSError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         print(f"ERROR de validación: {exc}", file=sys.stderr)
         return 1
 
@@ -998,15 +1009,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {digest}  {name}")
         return 0
 
+    base = api_base(data["protocol"])
     try:
-        ollama_state = verify_ollama_and_models(data["lock"])
+        ollama_state = verify_ollama_and_models(data["lock"], base)
     except (OSError, urllib.error.URLError, json.JSONDecodeError, RuntimeError) as exc:
         print(f"ERROR verificando Ollama: {exc}", file=sys.stderr)
         return 1
 
     power = detect_power()
-    official_eligible = args.mode == "official-functional" and power["condition"] == "ac_power" and not args.allow_battery
-    if args.mode == "official-functional" and power["condition"] != "ac_power" and not args.allow_battery:
+    acceptable_power = power["condition"] in {"ac_power", "not_applicable"}
+    official_eligible = (
+        args.mode == "official-functional" and acceptable_power and not args.allow_battery
+    )
+    if args.mode == "official-functional" and not acceptable_power and not args.allow_battery:
         print("ERROR: el modo oficial exige que macOS indique AC Power.", file=sys.stderr)
         print(power["raw"], file=sys.stderr)
         return 3
@@ -1020,11 +1035,18 @@ def main(argv: list[str] | None = None) -> int:
     if run_dir.exists() and not args.resume:
         print(f"ERROR: ya existe {run_dir}. Usa --resume o elige otro --run-id.", file=sys.stderr)
         return 4
+    if args.resume and not manifest_path.exists():
+        print(
+            "ERROR: --resume exige un manifest existente; no se mezclará un run huérfano.",
+            file=sys.stderr,
+        )
+        return 4
     run_dir.mkdir(parents=True, exist_ok=True)
 
     manifest = {
-        "schema_version": 1,
-        "runner_version": "functional-runner-v1.1-portable",
+        "schema_version": SCHEMA_VERSION,
+        "benchmark_version": BENCHMARK_VERSION,
+        "runner_version": "functional-runner-v2",
         "run_id": run_id,
         "mode": args.mode,
         "created_at_utc": utc_now().isoformat(),
@@ -1034,15 +1056,50 @@ def main(argv: list[str] | None = None) -> int:
         "case_ids": [case["id"] for case in plan["cases"]],
         "repetitions": plan["repetitions"],
         "sequences": sequences,
+        "order_control": data["protocol"]["order_control"],
         "input_hashes": data["hashes"],
+        "config_fingerprint": config_fingerprint(data["protocol"]),
+        "ollama_base_url": public_base_url(base),
         "ollama_version": ollama_state["version"].get("version"),
+        "model_identities": [
+            {"name": item.get("name"), "digest": item.get("digest")}
+            for item in data["lock"].get("models", [])
+            if item.get("name") in plan["models"]
+        ],
         "options": data["protocol"]["generation"],
+        "scoring_protocol": {
+            "weights": data["protocol"]["weights"],
+            "speed_weights": data["protocol"]["speed_weights"],
+            "workload_weights": data["protocol"]["workload_weights"],
+            "missing_metric_policy": data["protocol"]["missing_metric_policy"],
+        },
     }
     if manifest_path.exists():
-        existing = read_json(manifest_path)
-        stable_fields = ("mode", "models", "case_ids", "repetitions", "input_hashes")
-        if any(existing.get(field) != manifest.get(field) for field in stable_fields):
-            print("ERROR: el manifiesto existente no coincide con este comando.", file=sys.stderr)
+        try:
+            validate_manifest_compatibility(
+                read_json(manifest_path),
+                manifest,
+                (
+                    "schema_version",
+                    "benchmark_version",
+                    "runner_version",
+                    "mode",
+                    "models",
+                    "case_ids",
+                    "repetitions",
+                    "sequences",
+                    "order_control",
+                    "input_hashes",
+                    "config_fingerprint",
+                    "ollama_base_url",
+                    "ollama_version",
+                    "model_identities",
+                    "options",
+                    "scoring_protocol",
+                ),
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
             return 5
     else:
         write_json_atomic(manifest_path, manifest)
@@ -1063,18 +1120,30 @@ def main(argv: list[str] | None = None) -> int:
     }
     keep_alive_hot = str(data["protocol"].get("functional", {}).get("keep_alive", "5m"))
     functional_cfg = data["protocol"].get("functional", {})
-    pause = int(functional_cfg.get("pause_between_models_seconds", 30)) if args.mode == "official-functional" else int(functional_cfg.get("smoke_pause_seconds", 2))
+    pause = (
+        int(functional_cfg.get("pause_between_models_seconds", 30))
+        if args.mode == "official-functional"
+        else int(functional_cfg.get("smoke_pause_seconds", 2))
+    )
     random_seed = int(data["protocol"]["order_control"]["seed"])
     total = len(plan["models"]) * len(plan["cases"]) * plan["repetitions"]
     done_count = len(completed)
 
-    append_jsonl(snapshots_path, {"event": "run_start", "snapshot": system_snapshot()})
+    append_jsonl(snapshots_path, {"event": "run_start", "snapshot": system_snapshot(base)})
     try:
         for rep_index in range(plan["repetitions"]):
             cases = list(plan["cases"])
             random.Random(random_seed + rep_index).shuffle(cases)
             for model in sequences[rep_index]:
-                append_jsonl(snapshots_path, {"event": "model_block_start", "repetition": rep_index + 1, "model": model, "snapshot": system_snapshot()})
+                append_jsonl(
+                    snapshots_path,
+                    {
+                        "event": "model_block_start",
+                        "repetition": rep_index + 1,
+                        "model": model,
+                        "snapshot": system_snapshot(base),
+                    },
+                )
                 print(f"===== R{rep_index + 1} / {model} =====")
                 for case in cases:
                     key = f"R{rep_index + 1}:{model}:{case['id']}"
@@ -1083,7 +1152,17 @@ def main(argv: list[str] | None = None) -> int:
                         continue
                     started = utc_now()
                     try:
-                        result = run_case(model, case, tools_by_name, data["fixtures"], options, keep_alive_hot, generation.get("think", False))
+                        result = run_case(
+                            base,
+                            model,
+                            case,
+                            tools_by_name,
+                            data["fixtures"],
+                            options,
+                            keep_alive_hot,
+                            generation.get("think", False),
+                            int(functional_cfg["max_turns"]),
+                        )
                         error = None
                     except Exception as exc:
                         result = {
@@ -1091,12 +1170,16 @@ def main(argv: list[str] | None = None) -> int:
                             "tool_events": [],
                             "assistant_tool_turns": [],
                             "final_content": "",
-                            "evaluation": {"passed": False, "mode": case["expected"]["mode"], "checks": {"runner_error_free": False}},
+                            "evaluation": {
+                                "passed": False,
+                                "mode": case["expected"]["mode"],
+                                "checks": {"runner_error_free": False},
+                            },
                         }
                         error = f"{type(exc).__name__}: {exc}"
                     completed_at = utc_now()
                     record = {
-                        "schema_version": 1,
+                        "schema_version": SCHEMA_VERSION,
                         "execution_key": key,
                         "run_id": run_id,
                         "eligible_for_main_score": official_eligible,
@@ -1120,18 +1203,31 @@ def main(argv: list[str] | None = None) -> int:
                     completed.add(key)
                     done_count += 1
                     status = "PASS" if result["evaluation"]["passed"] else "FAIL"
-                    print(f"[{status}] {done_count}/{total} {case['id']} {case['title']} | {compact(result.get('final_content', ''))}")
-                unload_model(model)
-                append_jsonl(snapshots_path, {"event": "model_block_end", "repetition": rep_index + 1, "model": model, "snapshot": system_snapshot()})
+                    print(
+                        f"[{status}] {done_count}/{total} {case['id']} {case['title']} | {compact(result.get('final_content', ''))}"
+                    )
+                unload_model(model, base)
+                append_jsonl(
+                    snapshots_path,
+                    {
+                        "event": "model_block_end",
+                        "repetition": rep_index + 1,
+                        "model": model,
+                        "snapshot": system_snapshot(base),
+                    },
+                )
                 if pause:
                     time.sleep(pause)
     except KeyboardInterrupt:
-        print("\nInterrumpido por el usuario. Los casos ya terminados están guardados; usa --resume.", file=sys.stderr)
+        print(
+            "\nInterrumpido por el usuario. Los casos ya terminados están guardados; usa --resume.",
+            file=sys.stderr,
+        )
         return 130
     finally:
         for model in plan["models"]:
-            unload_model(model)
-        append_jsonl(snapshots_path, {"event": "run_end", "snapshot": system_snapshot()})
+            unload_model(model, base)
+        append_jsonl(snapshots_path, {"event": "run_end", "snapshot": system_snapshot(base)})
 
     summary = make_summary(records_path, run_dir)
     print()

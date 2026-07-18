@@ -1,5 +1,6 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "benchmark_version": "0.2.0",
   "models": [
     "gemma4:12b-mlx",
     "gemma4:12b-it-qat",
@@ -27,8 +28,12 @@
     "pause_between_models_seconds": 30,
     "smoke_pause_seconds": 2
   },
+  "order_control": {
+    "seed": 20260718,
+    "policy": "rotating_models_shuffled_cases"
+  },
   "performance": {
-    "cold_runs": 1,
+    "cold_runs": 3,
     "hot_runs": 5,
     "ttft_runs": 3,
     "keep_alive": "5m",
@@ -40,5 +45,18 @@
     "quality_reasoning": 0.25,
     "speed": 0.2,
     "memory_stability": 0.15
-  }
+  },
+  "speed_weights": {
+    "generation": 0.35,
+    "prompt": 0.2,
+    "hot_latency": 0.15,
+    "ttft": 0.15,
+    "cold_load": 0.15
+  },
+  "workload_weights": {
+    "short_technical_answer": 0.3333333333333333,
+    "long_generation": 0.3333333333333333,
+    "long_prompt_short_answer": 0.3333333333333334
+  },
+  "missing_metric_policy": "incomplete_score"
 }
