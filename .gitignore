@@ -1,0 +1,24 @@
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Configuración y artefactos locales
+config/benchmark.json
+config/models.lock.json
+config/models.lock.json.sha256
+runs/
+reports/
+raw/
+results/
+environment/
+sandbox/
+
+# Copias de pesos: nunca deben subirse accidentalmente
+ollama-model-backups/
+*.ollama-models.tar*
+
+*.egg-info/

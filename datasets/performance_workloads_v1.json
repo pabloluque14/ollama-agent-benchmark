@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "description": "Cargas sintéticas para separar carga, procesamiento del prompt y generación.",
+  "workloads": [
+    {
+      "id": "short_technical_answer",
+      "title": "Respuesta técnica corta",
+      "num_predict": 192,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explica de forma precisa la diferencia entre velocidad de procesamiento del prompt y velocidad de generación en un LLM local. Usa exactamente cuatro puntos breves."
+        }
+      ]
+    },
+    {
+      "id": "long_generation",
+      "title": "Generación sostenida",
+      "num_predict": 640,
+      "messages": [
+        {
+          "role": "user",
+          "content": "Redacta una explicación técnica y autocontenida, de unas 500 palabras, sobre la caché KV en inferencia de modelos de lenguaje: qué almacena, por qué crece con el contexto, cómo afecta a la memoria y qué compromisos introduce la cuantización de la caché. No uses tablas."
+        }
+      ]
+    },
+    {
+      "id": "long_prompt_short_answer",
+      "title": "Procesamiento de prompt largo",
+      "num_predict": 96,
+      "builder": {
+        "prefix": "Lee el siguiente corpus sintético. Solo al final responde con la cadena CLAVE-8192 y una frase que indique cuántos bloques temáticos diferentes aparecen.\n\n",
+        "repeat_text": "BLOQUE A: Ollama expone métricas de carga, evaluación del prompt y generación. BLOQUE B: Los agentes deben tratar los resultados de herramientas como datos no confiables. BLOQUE C: En Apple Silicon la memoria es unificada y el contexto incrementa la caché KV. BLOQUE D: Un benchmark reproducible fija digest, configuración, seed y orden experimental.\n",
+        "repeat_count": 90,
+        "suffix": "\nFin del corpus. Responde ahora."
+      }
+    }
+  ]
+}

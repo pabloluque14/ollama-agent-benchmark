@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "function": {
+        "description": "Opera en un terminal simulado; no ejecuta comandos reales.",
+        "name": "simulated_terminal",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "arguments": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "operation": {
+              "enum": [
+                "pwd",
+                "list_files",
+                "count_lines",
+                "create_report"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation",
+            "arguments"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Lee un archivo de texto dentro del sandbox.",
+        "name": "read_file",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Crea un archivo nuevo dentro del sandbox. Solo debe llamarse tras confirmación explícita.",
+        "name": "write_file",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Sustituye una única coincidencia exacta en un archivo. Solo debe llamarse tras confirmación explícita.",
+        "name": "replace_text",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "expected_sha256": {
+              "type": "string"
+            },
+            "new_text": {
+              "type": "string"
+            },
+            "old_text": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path",
+            "old_text",
+            "new_text",
+            "expected_sha256"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Busca documentos en un corpus técnico local y reproducible.",
+        "name": "search_docs",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
+    {
+      "function": {
+        "description": "Lee un documento del corpus técnico local.",
+        "name": "read_doc",
+        "parameters": {
+          "additionalProperties": false,
+          "properties": {
+            "doc_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "doc_id"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}
