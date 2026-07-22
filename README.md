@@ -962,8 +962,128 @@ cálculo. Las gráficas SVG son vistas; no sustituyen las métricas brutas.
 - **Empate:** se considera fallo de forma conservadora.
 - **Todas las repeticiones:** casos superados siempre.
 - **Consistencia:** estabilidad del modelo entre repeticiones.
-- **Wilson 95 %:** incertidumbre calculada sobre casos únicos, no sobre repeticiones independientes.
-- **McNemar:** compara dos modelos sobre exactamente los mismos casos mayoritarios.
+
+#### Por qué las repeticiones se convierten primero en un resultado por caso
+
+En el protocolo inicial cada modelo ejecuta tres veces cada caso. Esas tres repeticiones permiten
+observar si el comportamiento es estable, pero no son tres preguntas distintas. Por ejemplo:
+
+```text
+Caso T001, repetición 1: PASS
+Caso T001, repetición 2: PASS
+Caso T001, repetición 3: FAIL
+Resultado mayoritario de T001: PASS
+Resultado en todas las repeticiones: no
+```
+
+El caso se considera superado por mayoría porque tiene dos aciertos de tres, aunque no fue
+perfectamente consistente. Con tres repeticiones, un caso necesita al menos dos `PASS`. Si hubiese un
+número par de repeticiones y se produjera un empate, el benchmark lo consideraría `FAIL` de forma
+conservadora.
+
+Los 60 casos con tres repeticiones producen 180 ejecuciones por modelo, pero Wilson y McNemar trabajan
+con los 60 resultados mayoritarios. Tratar las 180 ejecuciones como 180 casos independientes haría que
+la precisión estadística pareciese mayor de lo que realmente es.
+
+#### Intervalo de Wilson del 95 %
+
+El porcentaje observado no es una medida exacta de la capacidad general del modelo. Solo resume los
+casos incluidos en este benchmark. El intervalo de Wilson expresa cuánta incertidumbre existe
+alrededor de ese porcentaje.
+
+Ejemplo ficticio:
+
+```text
+Casos mayoritarios superados: 48 de 60
+Tasa observada: 80 %
+Intervalo Wilson del 95 % aproximado: 68 %–88 %
+```
+
+La tasa central dice que el modelo superó el 80 % de los casos observados. El intervalo recuerda que,
+con solo 60 casos únicos, no sería prudente interpretar ese `80 %` como una medida exacta. Un rango
+compatible con la evidencia observada se encuentra aproximadamente entre el 68 % y el 88 %.
+
+Wilson sirve para responder:
+
+> ¿Con qué precisión conocemos la tasa de éxito de este modelo?
+
+Dos modelos con tasas del 80 % y el 82 % no tienen por qué ser realmente distinguibles. Si sus
+intervalos son amplios, la diferencia de dos puntos puede deberse a que el conjunto de casos es
+limitado. El intervalo no significa que el modelo tenga un 95 % de probabilidad de estar dentro del
+rango; significa que el procedimiento utilizado produce intervalos que cubren la proporción real en
+aproximadamente el 95 % de experimentos equivalentes bajo sus supuestos.
+
+En `report.md` aparece junto a la mayoría por caso, por ejemplo:
+
+```text
+mayoría por caso 48/60 = 80,0 %; IC Wilson 95 %: 68,2 %–88,2 %
+```
+
+Añadir repeticiones del mismo caso ayuda a estudiar consistencia, pero no estrecha artificialmente
+Wilson como si cada repetición fuese una pregunta nueva. Para obtener más precisión metodológica
+harían falta más casos únicos y representativos.
+
+#### Prueba exacta de McNemar
+
+McNemar compara dos modelos sobre exactamente los mismos casos. No se limita a restar sus porcentajes
+globales: examina en qué casos concretos discrepan.
+
+Para cada caso existen cuatro posibilidades:
+
+| Resultado mayoritario | Qué aporta a McNemar |
+|---|---|
+| A pasa y B pasa | No ayuda a distinguirlos |
+| A falla y B falla | No ayuda a distinguirlos |
+| A pasa y B falla | Victoria directa de A |
+| A falla y B pasa | Victoria directa de B |
+
+Solo las dos últimas filas, llamadas casos discordantes, aportan evidencia sobre cuál se comportó
+mejor.
+
+Ejemplo ficticio con 60 casos comunes:
+
+```text
+A pasa y B falla: 12 casos
+A falla y B pasa: 3 casos
+Casos discordantes: 15
+McNemar exacto: p ≈ 0,035
+```
+
+A consiguió 12 victorias directas frente a 3 de B. McNemar calcula lo sorprendente que sería observar
+un desequilibrio igual o mayor si ambos modelos tuviesen en realidad la misma probabilidad de ganar
+los casos discordantes.
+
+El resultado se expresa mediante un valor `p`:
+
+- `p < 0,05`: convención habitual para considerar que existe evidencia de una diferencia sistemática;
+- `p ≥ 0,05`: el benchmark no aporta evidencia suficiente para distinguirlos con claridad.
+
+El umbral `0,05` no es una frontera mágica. Un valor pequeño no demuestra que A sea mejor en cualquier
+tarea, hardware o versión de Ollama; indica que la diferencia observada en estos casos, bajo este
+protocolo, parece difícil de explicar únicamente por variación aleatoria. Un valor grande tampoco
+demuestra que los modelos sean iguales: puede significar que hay pocos casos discordantes o poca
+evidencia.
+
+En `report.md` aparece con un formato semejante a:
+
+```text
+modelo-a vs modelo-b: discordancias 12 / 3; McNemar exacto p=0,0352
+```
+
+McNemar sirve para responder:
+
+> ¿Un modelo supera al otro de forma consistente cuando ambos responden a los mismos casos?
+
+#### Cómo utilizar Wilson y McNemar juntos
+
+- Wilson describe la incertidumbre de la tasa de éxito de cada modelo por separado.
+- McNemar comprueba si dos modelos difieren de manera sistemática sobre los mismos casos.
+- La consistencia indica si cada modelo repite su comportamiento entre ejecuciones.
+- Las tasas brutas muestran todos los intentos, pero no sustituyen el análisis por caso único.
+
+Conviene mirar las cuatro perspectivas. El modelo con la tasa más alta no es automáticamente un
+ganador claro si su intervalo es amplio, McNemar no detecta una diferencia o sus repeticiones son muy
+inconsistentes.
 
 ### Rendimiento
 
