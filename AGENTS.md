@@ -35,3 +35,14 @@ push sin petición expresa. Todo cambio de evaluación, scoring, schema o seguri
 Un cambio termina cuando tests, validación, Ruff, Mypy y cobertura pasan; los formatos están
 versionados; la documentación española refleja el comportamiento; y ninguna prueba depende de
 Ollama real.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked as local Markdown under `.scratch/<feature>/`. See
+`docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+This repository uses a single-context domain documentation layout. See `docs/agents/domain.md`.
