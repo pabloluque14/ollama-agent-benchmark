@@ -41,9 +41,9 @@ class CommonTests(unittest.TestCase):
         self.assertEqual(exact_mcnemar(0, 0), 1.0)
         self.assertAlmostEqual(exact_mcnemar(2, 5), exact_mcnemar(5, 2))
 
-    def test_example_config_is_complete_v2(self):
+    def test_example_config_is_complete_v3(self):
         config = load_config(Path(__file__).parents[1] / "config" / "benchmark.example.json")
-        self.assertEqual(config["schema_version"], 2)
+        self.assertEqual(config["schema_version"], 3)
         self.assertIsInstance(config["order_control"]["seed"], int)
         self.assertEqual(sum(config["speed_weights"].values()), 1.0)
 

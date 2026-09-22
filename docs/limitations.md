@@ -11,4 +11,4 @@
 - No se conectan herramientas reales.
 - Un servidor falso demuestra integración de protocolo, no equivalencia con todas las versiones de Ollama.
 - Linux puede producir `N/D` para swap/térmica/memoria; no se inventan ceros.
-- Los runs 0.1.0 no se convierten ni se mezclan con 0.2.0.
+- Los runs 0.1.0 y 0.2.0 no se convierten, reanudan ni mezclan con 0.3.0.

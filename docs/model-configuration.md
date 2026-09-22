@@ -14,7 +14,8 @@ Edita `config/benchmark.json`:
 }
 ```
 
-El orden se usa como punto inicial. El runner lo rota entre repeticiones.
+En planes v3, el orden de la lista no decide las posiciones: la seed y los digests bloqueados
+determinan una permutación inicial, equilibrada después por bloque experimental.
 
 El plan del run registra el modo y los valores realmente elegidos después de aplicar configuración
 y CLI (`--repetitions`, `--models`, `--case-ids` o `--workloads`, según runner). Reanudar con valores

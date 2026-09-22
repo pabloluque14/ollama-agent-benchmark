@@ -29,16 +29,36 @@ ROOT = project_root()
 CONFIG_PATH = ROOT / "config" / "benchmark.json"
 LOCK_PATH = ROOT / "config" / "models.lock.json"
 API_DEFAULT = "http://127.0.0.1:11434"
-BENCHMARK_VERSION = "0.2.0"
-SCHEMA_VERSION = 2
+BENCHMARK_VERSION = "0.3.0"
+SCHEMA_VERSION = 3
 
 
 def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
 
 
+def parse_json_strict(value: str) -> Any:
+    def unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError("Clave JSON duplicada")
+            result[key] = item
+        return result
+
+    def invalid_constant(value: str) -> None:
+        raise ValueError(f"Constante JSON no permitida: {value}")
+
+    return json.loads(value, object_pairs_hook=unique_pairs, parse_constant=invalid_constant)
+
+
 def read_json(path: pathlib.Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return parse_json_strict(path.read_text(encoding="utf-8"))
+    except (UnicodeError, ValueError) as exc:
+        line = exc.lineno if isinstance(exc, json.JSONDecodeError) else 1
+        cause = exc.msg if isinstance(exc, json.JSONDecodeError) else type(exc).__name__
+        raise ValueError(f"{path}: línea {line}: JSON inválido ({cause})") from None
 
 
 def write_json_atomic(path: pathlib.Path, value: Any) -> None:
@@ -60,9 +80,12 @@ def write_json_atomic(path: pathlib.Path, value: Any) -> None:
 
 
 def append_jsonl(path: pathlib.Path, value: Any) -> None:
+    encoded = (
+        json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False) + "\n"
+    ).encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(value, ensure_ascii=False, sort_keys=True) + "\n")
+    with path.open("ab") as handle:
+        handle.write(encoded)
         handle.flush()
         os.fsync(handle.fileno())
 
@@ -203,7 +226,7 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> dict[str, Any]:
         raise ValueError("La configuración debe ser un objeto JSON")
     if config.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(
-            f"config.schema_version debe ser {SCHEMA_VERSION}; los formatos 0.1.0 no son compatibles"
+            f"config.schema_version debe ser {SCHEMA_VERSION}; los formatos 0.2.0 no son compatibles"
         )
     if config.get("benchmark_version") != BENCHMARK_VERSION:
         raise ValueError(f"config.benchmark_version debe ser {BENCHMARK_VERSION}")
@@ -310,7 +333,7 @@ def verify_lock(config: dict[str, Any], lock_path: pathlib.Path = LOCK_PATH) -> 
         or lock.get("benchmark_version") != BENCHMARK_VERSION
     ):
         raise ValueError(
-            "El lock pertenece a 0.1.0 o a un formato incompatible; regénéralo con oab lock --force"
+            "El lock pertenece a 0.2.0 o a un formato incompatible; regénéralo con oab lock --force"
         )
     locked_names = [item.get("name") for item in lock.get("models", [])]
     if locked_names != config.get("models"):
@@ -412,7 +435,23 @@ def safe_slug(value: str) -> str:
 
 
 def iter_jsonl(path: pathlib.Path) -> Iterable[dict[str, Any]]:
-    with path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                yield json.loads(line)
+    """Valida el archivo completo antes de exponer ningún registro."""
+    try:
+        payload = path.read_bytes().decode("utf-8")
+    except UnicodeError:
+        raise ValueError(f"{path}: UTF-8 inválido") from None
+    if payload and not payload.endswith("\n"):
+        raise ValueError(f"{path}: línea {payload.count(chr(10)) + 1}: línea truncada")
+    records: list[dict[str, Any]] = []
+    for number, line in enumerate(payload.splitlines(), 1):
+        if not line.strip():
+            raise ValueError(f"{path}: línea {number}: línea vacía")
+        try:
+            value = parse_json_strict(line)
+        except ValueError as exc:
+            cause = exc.msg if isinstance(exc, json.JSONDecodeError) else type(exc).__name__
+            raise ValueError(f"{path}: línea {number}: JSON inválido ({cause})") from None
+        if not isinstance(value, dict):
+            raise ValueError(f"{path}: línea {number}: se esperaba un objeto JSON")
+        records.append(value)
+    return records

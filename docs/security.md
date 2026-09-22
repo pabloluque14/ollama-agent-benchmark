@@ -35,6 +35,18 @@ Los archivos y documentos existen únicamente en memoria y se reinician para cad
 - No expone Ollama a la red.
 - No instala OpenClaw.
 
+## Evidencia y diagnósticos de `0.3.0`
+
+Los registros primarios se validan completos antes de añadirse y los JSONL corruptos se rechazan
+sin consumir su prefijo ni modificar el archivo. Los fallos atribuibles a la ejecución satisfacen
+su clave como resultado terminal; un defecto incierto o del harness se conserva en el diario de
+integridad y no penaliza al modelo.
+
+Antes de mostrar o persistir errores se redactan credenciales, tokens, cabeceras de autorización y
+URLs que puedan contener secretos. Si el propio diario no puede persistirse, el proceso termina con
+error y no completa la clave afectada. Los diagnósticos saneados ayudan a localizar el componente,
+pero no sustituyen un almacén externo seguro para trazas privadas.
+
 ## Paso posterior al benchmark
 
 El ganador debe validarse de nuevo en un sandbox real con:

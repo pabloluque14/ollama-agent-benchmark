@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:oab:performance-workloads:2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "description", "workloads"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "description": {"type": "string"},
+    "workloads": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "num_predict", "compliance"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "title": {"type": "string", "minLength": 1},
+          "num_predict": {"type": "integer", "minimum": 1},
+          "messages": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["role", "content"],
+              "properties": {
+                "role": {"enum": ["user", "assistant", "system"]},
+                "content": {"type": "string"}
+              }
+            }
+          },
+          "builder": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["prefix", "repeat_text", "repeat_count", "suffix"],
+            "properties": {
+              "prefix": {"type": "string"},
+              "repeat_text": {"type": "string"},
+              "repeat_count": {"type": "integer", "minimum": 1},
+              "suffix": {"type": "string"}
+            }
+          },
+          "compliance": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["min_output_tokens"],
+            "properties": {
+              "min_output_tokens": {"type": "integer", "minimum": 1},
+              "required_regex": {"type": "array", "items": {"type": "string"}},
+              "must_contain": {"type": "array", "items": {"type": "string"}},
+              "must_contain_any": {"type": "array", "items": {"type": "string"}},
+              "min_numbered_points": {"type": "integer", "minimum": 0},
+              "max_numbered_points": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    }
+  }
+}

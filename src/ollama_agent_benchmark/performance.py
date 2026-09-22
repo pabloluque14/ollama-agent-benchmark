@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import json
 import pathlib
@@ -25,6 +26,7 @@ from .common import (
     load_config,
     metric_rates,
     model_ps_snapshot,
+    parse_json_strict,
     parse_swap_used_bytes,
     post_json,
     public_base_url,
@@ -34,13 +36,60 @@ from .common import (
     unload_model,
     utc_now,
     validate_manifest_compatibility,
-    verify_lock,
     wait_until_unloaded,
     write_json_atomic,
 )
-from .run_plan import create_run_plan, load_compatible_run_plan, make_run_plan
+from .failures import (
+    BenchmarkIntegrityFailure,
+    ExecutionFailureError,
+    classify_failure,
+    record_integrity_failure,
+    sanitize_text,
+)
+from .input_contracts import validate_dataset
+from .primary_records import append_primary_record
+from .resume import validate_resume_evidence
+from .run_plan import (
+    create_run_plan,
+    make_run_plan,
+    performance_calendar,
+    preflight_run_plan,
+    validate_planning_inputs,
+    validate_run_plan,
+)
 
 WORKLOADS_PATH = ROOT / "datasets" / "performance_workloads_v2.json"
+
+
+def inputs_from_performance_plan(plan: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    """Reconstruye la ejecución desde el plan original inmutable."""
+    workloads_doc = parse_json_strict(
+        base64.b64decode(
+            plan["input_snapshots"]["datasets/performance_workloads_v2.json"]
+        ).decode("utf-8")
+    )
+    by_id = {item["id"]: item for item in workloads_doc["workloads"]}
+    effective = plan["effective"]
+    config = {
+        "models": effective["models"],
+        "ollama": {"base_url": plan["ollama"]["base_url"]},
+        "generation": plan["generation"],
+        "order_control": plan["order_control"],
+        "performance": {
+            "cold_runs": effective["cold_runs"],
+            "hot_runs": effective["hot_runs"],
+            "ttft_runs": effective["ttft_runs"],
+            "keep_alive": effective["keep_alive"],
+            "pause_after_unload_seconds": effective["pause_after_unload_seconds"],
+            "pause_between_models_seconds": effective["pause_between_models_seconds"],
+        },
+        **plan["scoring_protocol"],
+    }
+    lock = {
+        "ollama_server_version": plan["ollama"]["version"],
+        "models": plan["models"],
+    }
+    return config, [by_id[item] for item in effective["workload_ids"]], lock
 
 
 def build_messages(workload: dict[str, Any]) -> list[dict[str, str]]:
@@ -52,7 +101,12 @@ def build_messages(workload: dict[str, Any]) -> list[dict[str, str]]:
     return [{"role": "user", "content": prompt}]
 
 
-def streaming_ttft(base: str, payload: dict[str, Any], timeout: int = 900) -> dict[str, Any]:
+def streaming_ttft(
+    base: str,
+    payload: dict[str, Any],
+    workload: dict[str, Any] | None = None,
+    timeout: int = 900,
+) -> dict[str, Any]:
     body = json.dumps({**payload, "stream": True}).encode("utf-8")
     request = urllib.request.Request(
         base.rstrip("/") + "/api/chat",
@@ -64,25 +118,65 @@ def streaming_ttft(base: str, payload: dict[str, Any], timeout: int = 900) -> di
     first = None
     final: dict[str, Any] | None = None
     chunks = 0
+    content: list[str] = []
+    thinking: list[str] = []
+    tool_calls: list[Any] = []
     with urllib.request.urlopen(request, timeout=timeout) as response:
         for raw in response:
             if not raw.strip():
                 continue
-            chunk = json.loads(raw)
+            try:
+                chunk = json.loads(raw)
+            except (UnicodeError, json.JSONDecodeError) as exc:
+                raise ExecutionFailureError("stream NDJSON malformado") from exc
+            if not isinstance(chunk, dict):
+                raise ExecutionFailureError("chunk NDJSON no es un objeto")
             chunks += 1
             message = chunk.get("message") or {}
+            if not isinstance(message, dict):
+                raise ExecutionFailureError("message del stream no es un objeto")
             has_payload = bool(
                 message.get("content") or message.get("thinking") or message.get("tool_calls")
             )
             if first is None and has_payload:
                 first = time.monotonic() - started
+            if isinstance(message.get("content"), str):
+                content.append(message["content"])
+            if isinstance(message.get("thinking"), str):
+                thinking.append(message["thinking"])
+            calls = message.get("tool_calls")
+            if isinstance(calls, list):
+                tool_calls.extend(calls)
             if chunk.get("done"):
                 final = chunk
+    if final is None:
+        raise ExecutionFailureError("stream truncado o sin señal final")
+    reconstructed = {
+        **final,
+        "message": {
+            "role": "assistant",
+            "content": "".join(content),
+            "thinking": "".join(thinking),
+            "tool_calls": tool_calls,
+        },
+    }
+    compliance = (
+        validate_workload_response(workload, reconstructed)
+        if workload is not None
+        else {
+            "valid": first is not None,
+            "checks": {"payload": first is not None},
+            "failed_checks": [] if first is not None else ["payload"],
+        }
+    )
     return {
-        "ttft_seconds": first,
+        "ttft_seconds": first if compliance["valid"] else None,
+        "observed_ttft_seconds": first,
         "stream_total_seconds": time.monotonic() - started,
         "chunks": chunks,
-        "final_metrics": metric_rates(final or {}),
+        "final_metrics": metric_rates(final),
+        "reconstructed_response": reconstructed,
+        "workload_compliance": compliance,
     }
 
 
@@ -185,6 +279,7 @@ def summarize(
     ttft_path: pathlib.Path,
     output_dir: pathlib.Path,
     workload_weights: dict[str, float] | None = None,
+    plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     records = list(iter_jsonl(records_path)) if records_path.is_file() else []
     ttft = list(iter_jsonl(ttft_path)) if ttft_path.is_file() else []
@@ -286,24 +381,28 @@ def summarize(
                 }
             )
 
+    if plan is not None:
+        from .aggregation import aggregate_performance_cells
+
+        models_summary = aggregate_performance_cells(plan, records, ttft)
+
     for _model, data in models_summary.items():
         workloads = data["workloads"]
         if workload_weights is None:
             weights = {key: 1.0 / len(workloads) for key in workloads} if workloads else {}
         else:
             weights = workload_weights
-        data["aggregate"] = {
-            field: _weighted_metric(workloads, field, weights)
-            for field in (
-                "hot_prompt_tps",
-                "hot_generation_tps",
-                "hot_total_seconds",
-                "cold_load_seconds",
-                "size_vram_bytes",
-                "swap_delta_bytes",
-                "ttft_seconds",
-            )
-        }
+        fields = [
+            "hot_prompt_tps",
+            "hot_generation_tps",
+            "hot_total_seconds",
+            "cold_load_seconds",
+            "size_vram_bytes",
+            "swap_delta_bytes",
+        ]
+        if plan is None or plan["effective"]["ttft_runs"]:
+            fields.append("ttft_seconds")
+        data["aggregate"] = {field: _weighted_metric(workloads, field, weights) for field in fields}
 
     csv_path = output_dir / "performance_results.csv"
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
@@ -336,78 +435,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--allow-battery",
         action="store_true",
+        default=None,
         help="Permite batería, pero marca un run oficial como exploratorio",
     )
     parser.add_argument("--resume", action="store_true", help="Reanuda un run compatible")
     args = parser.parse_args(argv)
 
-    try:
-        config = load_config(CONFIG_PATH)
-        workloads_doc = json.loads(WORKLOADS_PATH.read_text(encoding="utf-8"))
-    except Exception as exc:
-        print(f"ERROR de validación: {exc}", file=sys.stderr)
-        return 1
-
-    models = config["models"]
-    if args.models:
-        requested = [x.strip() for x in args.models.split(",") if x.strip()]
-        unknown = sorted(set(requested) - set(models))
-        if unknown:
-            print(f"ERROR: modelos no bloqueados: {unknown}", file=sys.stderr)
-            return 1
-        models = requested
-
-    workloads = workloads_doc["workloads"]
-    by_id = {x["id"]: x for x in workloads}
-    if args.workloads:
-        ids = [x.strip() for x in args.workloads.split(",") if x.strip()]
-        unknown = sorted(set(ids) - set(by_id))
-        if unknown:
-            print(f"ERROR: workloads desconocidos: {unknown}", file=sys.stderr)
-            return 1
-        workloads = [by_id[x] for x in ids]
-    elif args.mode == "smoke":
-        workloads = workloads[:1]
-
-    perf = config["performance"]
-    cold_runs = 1 if args.mode == "smoke" else int(perf.get("cold_runs", 3))
-    hot_runs = 1 if args.mode == "smoke" else int(perf.get("hot_runs", 5))
-    ttft_runs = 0 if args.mode == "smoke" else int(perf.get("ttft_runs", 3))
-    print("===== PLAN DE RENDIMIENTO =====")
-    print(f"Modo: {args.mode}")
-    print(f"Modelos: {', '.join(models)}")
-    print(f"Workloads: {', '.join(x['id'] for x in workloads)}")
-    print(f"Por modelo/workload: {cold_runs} fría + {hot_runs} calientes + {ttft_runs} TTFT")
-    print(f"Respuestas no streaming: {len(models) * len(workloads) * (cold_runs + hot_runs)}")
-    print()
-    if args.mode == "dry-run":
-        print("Resultado: OK. No se llamó a Ollama ni se cargó ningún modelo.")
-        return 0
-
-    power = detect_power()
-    eligible = (
-        args.mode == "official-performance"
-        and power["condition"] in {"ac_power", "not_applicable"}
-        and not args.allow_battery
-    )
-    if (
-        args.mode == "official-performance"
-        and power["condition"] == "battery"
-        and not args.allow_battery
-    ):
-        print("ERROR: el modo oficial exige AC Power en macOS.", file=sys.stderr)
-        return 3
-
-    base = api_base(config)
+    if args.resume and not args.run_id:
+        print("ERROR: --resume requiere --run-id para localizar el plan original.", file=sys.stderr)
+        return 4
     run_id = args.run_id or f"{args.mode}_{utc_now().strftime('%Y%m%dT%H%M%SZ')}"
     run_dir = ROOT / "runs" / run_id
     records_path = run_dir / "performance_records.jsonl"
     ttft_path = run_dir / "ttft_records.jsonl"
     manifest_path = run_dir / "performance_manifest.json"
     plan_path = run_dir / "plan.json"
-    if run_dir.exists() and not args.resume:
-        print(f"ERROR: ya existe {run_dir}; usa --resume o cambia --run-id", file=sys.stderr)
-        return 4
+    integrity_path = run_dir / "integrity.jsonl"
+    lock_path = CONFIG_PATH.parent / "models.lock.json"
     if args.resume and not plan_path.exists():
         detail = (
             "run v2 sin plan v3; no hay migración ni reanudación compatible"
@@ -417,78 +461,169 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: --resume rechazado: {detail}.", file=sys.stderr)
         return 4
 
-    lock_path = CONFIG_PATH.parent / "models.lock.json"
+    try:
+        if args.resume:
+            run_plan = validate_run_plan(read_json(plan_path))
+            if run_plan["runner"] != "performance" or run_plan["mode"] != args.mode:
+                raise ValueError("modo o runner distinto del plan original")
+            effective = run_plan["effective"]
+            requested_models = (
+                [item.strip() for item in args.models.split(",") if item.strip()]
+                if args.models
+                else None
+            )
+            requested_workloads = (
+                [item.strip() for item in args.workloads.split(",") if item.strip()]
+                if args.workloads
+                else None
+            )
+            if requested_models is not None and requested_models != effective["models"]:
+                raise ValueError("override de modelos distinto del plan original")
+            if requested_workloads is not None and requested_workloads != effective["workload_ids"]:
+                raise ValueError("override de workloads distinto del plan original")
+            if (
+                args.allow_battery is not None
+                and args.allow_battery != run_plan["overrides"]["allow_battery"]
+            ):
+                raise ValueError("override allow_battery distinto del plan original")
+            config, workloads, lock = inputs_from_performance_plan(run_plan)
+            models = effective["models"]
+            cold_runs = effective["cold_runs"]
+            hot_runs = effective["hot_runs"]
+            ttft_runs = effective["ttft_runs"]
+        else:
+            config = load_config(CONFIG_PATH)
+            workloads_doc = read_json(WORKLOADS_PATH)
+            lock = read_json(lock_path)
+            validate_planning_inputs(config, lock)
+            validate_dataset("workloads", workloads_doc)
+            models = config["models"]
+            if args.models:
+                requested_models = [
+                    item.strip() for item in args.models.split(",") if item.strip()
+                ]
+                unknown = sorted(set(requested_models) - set(models))
+                if unknown:
+                    raise ValueError(f"modelos no bloqueados: {unknown}")
+                models = requested_models
+            workloads = workloads_doc["workloads"]
+            all_workloads = {item["id"]: item for item in workloads}
+            if args.workloads:
+                requested_workloads = [
+                    item.strip() for item in args.workloads.split(",") if item.strip()
+                ]
+                unknown = sorted(set(requested_workloads) - set(all_workloads))
+                if unknown:
+                    raise ValueError(f"workloads desconocidos: {unknown}")
+                workloads = [all_workloads[item] for item in requested_workloads]
+            elif args.mode == "smoke":
+                workloads = workloads[:1]
+            perf = config["performance"]
+            cold_runs = 1 if args.mode == "smoke" else int(perf.get("cold_runs", 3))
+            hot_runs = 1 if args.mode == "smoke" else int(perf.get("hot_runs", 5))
+            ttft_runs = 0 if args.mode == "smoke" else int(perf.get("ttft_runs", 3))
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        print(f"ERROR de validación: {exc}", file=sys.stderr)
+        return 4 if args.resume else 1
+
+    by_id = {item["id"]: item for item in workloads}
+    perf = config["performance"]
+    print("===== PLAN DE RENDIMIENTO =====")
+    print(f"Modo: {args.mode}")
+    print(f"Modelos: {', '.join(models)}")
+    print(f"Workloads: {', '.join(x['id'] for x in workloads)}")
+    print(f"Por modelo/workload: {cold_runs} fría + {hot_runs} calientes + {ttft_runs} TTFT")
+    print(f"Respuestas no streaming: {len(models) * len(workloads) * (cold_runs + hot_runs)}")
+    print()
+    power = detect_power()
+    allow_battery = bool(args.allow_battery)
+    eligible = (
+        run_plan["official_eligible"]
+        if args.resume
+        else args.mode == "official-performance"
+        and power["condition"] in {"ac_power", "not_applicable"}
+        and not allow_battery
+    )
+    if (
+        args.mode == "official-performance"
+        and power["condition"] == "battery"
+        and not allow_battery
+    ):
+        print("ERROR: el modo oficial exige AC Power en macOS.", file=sys.stderr)
+        return 3
+
+    base = api_base(config)
+    if run_dir.exists() and not args.resume:
+        print(f"ERROR: ya existe {run_dir}; usa --resume o cambia --run-id", file=sys.stderr)
+        return 4
     keep_alive = perf["keep_alive"]
     after_unload = perf["pause_after_unload_seconds"]
     between_models = perf["pause_between_models_seconds"]
-    calendar = []
-    for workload_index, workload in enumerate(workloads):
-        sequence = models[workload_index % len(models) :] + models[: workload_index % len(models)]
-        for position, model in enumerate(sequence, 1):
-            for state, count in (("cold", cold_runs), ("hot", hot_runs), ("ttft", ttft_runs)):
-                for index in range(1, count + 1):
-                    key = (
-                        f"ttft:{model}:{workload['id']}:{index}"
-                        if state == "ttft"
-                        else f"{model}:{workload['id']}:{state}:{index}"
-                    )
-                    calendar.append(
-                        {
-                            "execution_key": key,
-                            "model": model,
-                            "target_id": workload["id"],
-                            "repetition": index,
-                            "measurement_type": state,
-                            "block": f"{workload['id']}:{state}:{index}",
-                            "position": position,
-                        }
-                    )
     try:
-        lock = read_json(lock_path)
-        run_plan = make_run_plan(
-            run_id=run_id,
-            runner="performance",
-            mode=args.mode,
-            config=config,
-            lock=lock,
-            effective={
-                "models": models,
-                "workload_ids": [item["id"] for item in workloads],
-                "cold_runs": cold_runs,
-                "hot_runs": hot_runs,
-                "ttft_runs": ttft_runs,
-                "keep_alive": keep_alive,
-                "pause_after_unload_seconds": after_unload,
-                "pause_between_models_seconds": between_models,
-            },
-            overrides={
-                "models": [x.strip() for x in args.models.split(",") if x.strip()]
-                if args.models
-                else None,
-                "workloads": [x.strip() for x in args.workloads.split(",") if x.strip()]
-                if args.workloads
-                else None,
-                "allow_battery": args.allow_battery,
-            },
-            calendar=calendar,
-            input_hashes={
-                str(CONFIG_PATH.relative_to(ROOT)): sha256_file(CONFIG_PATH),
-                str(lock_path.relative_to(ROOT)): sha256_file(lock_path),
-                str(WORKLOADS_PATH.relative_to(ROOT)): sha256_file(WORKLOADS_PATH),
-            },
-            power_condition=power["condition"],
-            official_eligible=eligible,
-        )
-        if args.resume:
-            run_plan = load_compatible_run_plan(plan_path, run_plan)
-        else:
+        if not args.resume:
+            calendar = performance_calendar(
+                [item for item in lock["models"] if item["name"] in models],
+                [item["id"] for item in workloads],
+                cold_runs,
+                hot_runs,
+                ttft_runs,
+                config["order_control"]["seed"],
+            )
+            run_plan = make_run_plan(
+                run_id=run_id,
+                runner="performance",
+                mode=args.mode,
+                config=config,
+                lock=lock,
+                effective={
+                    "models": models,
+                    "workload_ids": [item["id"] for item in workloads],
+                    "cold_runs": cold_runs,
+                    "hot_runs": hot_runs,
+                    "ttft_runs": ttft_runs,
+                    "keep_alive": keep_alive,
+                    "pause_after_unload_seconds": after_unload,
+                    "pause_between_models_seconds": between_models,
+                },
+                overrides={
+                    "models": [x.strip() for x in args.models.split(",") if x.strip()]
+                    if args.models
+                    else None,
+                    "workloads": [x.strip() for x in args.workloads.split(",") if x.strip()]
+                    if args.workloads
+                    else None,
+                    "allow_battery": allow_battery,
+                },
+                calendar=calendar,
+                input_hashes={
+                    str(CONFIG_PATH.relative_to(ROOT)): sha256_file(CONFIG_PATH),
+                    str(lock_path.relative_to(ROOT)): sha256_file(lock_path),
+                    str(WORKLOADS_PATH.relative_to(ROOT)): sha256_file(WORKLOADS_PATH),
+                },
+                input_snapshots={
+                    str(WORKLOADS_PATH.relative_to(ROOT)): base64.b64encode(
+                        WORKLOADS_PATH.read_bytes()
+                    ).decode("ascii")
+                },
+                power_condition=power["condition"],
+                official_eligible=eligible,
+            )
+        if args.mode == "dry-run":
+            print("Resultado: OK. Plan validado. No se llamó a Ollama ni se guardaron mediciones.")
+            return 0
+        if not args.resume:
             create_run_plan(plan_path, run_plan)
+        completed_by_kind = validate_resume_evidence(
+            run_plan,
+            {"performance": records_path, "ttft": ttft_path},
+            integrity_path,
+        )
     except (OSError, KeyError, TypeError, ValueError) as exc:
         print(f"ERROR materializando plan: {exc}", file=sys.stderr)
         return 4
 
     try:
-        lock = verify_lock(config)
+        preflight_run_plan(run_plan)
     except Exception as exc:
         print(f"ERROR verificando lock/Ollama: {exc}", file=sys.stderr)
         return 1
@@ -496,7 +631,7 @@ def main(argv: list[str] | None = None) -> int:
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "benchmark_version": BENCHMARK_VERSION,
-        "runner_version": "performance-runner-v2",
+        "runner_version": "performance-runner-v3",
         "run_id": run_id,
         "mode": args.mode,
         "created_at_utc": utc_now().isoformat(),
@@ -517,7 +652,9 @@ def main(argv: list[str] | None = None) -> int:
         "generation": config["generation"],
         "order_control": config["order_control"],
         "config_fingerprint": config_fingerprint(config),
-        "workloads_hash": sha256_file(WORKLOADS_PATH),
+        "workloads_hash": run_plan["input_hashes"][
+            "datasets/performance_workloads_v2.json"
+        ],
         "scoring_protocol": {
             "weights": config["weights"],
             "speed_weights": config["speed_weights"],
@@ -525,7 +662,7 @@ def main(argv: list[str] | None = None) -> int:
             "missing_metric_policy": config["missing_metric_policy"],
         },
     }
-    if manifest_path.exists():
+    if manifest_path.exists() and not args.resume:
         try:
             validate_manifest_compatibility(
                 json.loads(manifest_path.read_text(encoding="utf-8")),
@@ -553,29 +690,11 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 5
-    else:
+    elif not args.resume:
         write_json_atomic(manifest_path, manifest)
-    completed = (
-        {
-            item["execution_key"]
-            for item in iter_jsonl(records_path)
-            if not item.get("runner_error")
-            and not str(item.get("execution_key", "")).startswith("failed:")
-        }
-        if records_path.is_file()
-        else set()
-    )
-    completed_ttft = (
-        {
-            item["execution_key"]
-            for item in iter_jsonl(ttft_path)
-            if not item.get("runner_error") and isinstance(item.get("execution_key"), str)
-        }
-        if ttft_path.is_file()
-        else set()
-    )
+    completed = completed_by_kind["performance"]
+    completed_ttft = completed_by_kind["ttft"]
 
-    order = models
     total = len(models) * len(workloads) * (cold_runs + hot_runs)
     done = len(completed)
 
@@ -584,148 +703,172 @@ def main(argv: list[str] | None = None) -> int:
         {"event": "run_start", "snapshot": system_snapshot(base)},
     )
     try:
-        for workload_index, workload in enumerate(workloads):
-            sequence = order[workload_index % len(order) :] + order[: workload_index % len(order)]
-            for model in sequence:
-                print(f"===== {workload['id']} / {model} =====")
-                for state, count in (("cold", cold_runs), ("hot", hot_runs)):
-                    for index in range(1, count + 1):
-                        key = f"{model}:{workload['id']}:{state}:{index}"
-                        if key in completed:
-                            print(f"[SKIP] {key}")
-                            continue
-                        if state == "cold":
-                            unload_model(model, base)
-                            unloaded = wait_until_unloaded(model, base)
-                            if after_unload:
-                                time.sleep(after_unload)
-                        else:
-                            unloaded = None
-                        swap_before = parse_swap_used_bytes()
-                        started = utc_now()
-                        error = None
-                        try:
-                            exchange, wall = run_response(base, model, workload, config, keep_alive)
-                            metrics = metric_rates(exchange["response"])
-                            ps = model_ps_snapshot(model, base)
-                            compliance = validate_workload_response(workload, exchange["response"])
-                        except Exception as exc:
-                            exchange, wall, metrics, ps = {}, None, {}, None
-                            compliance = {
-                                "valid": False,
-                                "checks": {},
-                                "failed_checks": ["runner_error"],
-                            }
-                            error = f"{type(exc).__name__}: {exc}"
-                        if state == "cold" and not unloaded:
-                            error = (
-                                error or "ColdUnloadError: no se confirmó la descarga del modelo"
+        for entry in run_plan["calendar"]:
+            workload = by_id[entry["target_id"]]
+            model = entry["model"]
+            state = entry["measurement_type"]
+            index = entry["repetition"]
+            key = entry["execution_key"]
+            print(f"===== {workload['id']} / {model} / {state} {index} =====")
+            if state == "ttft":
+                if key in completed_ttft:
+                    print(f"[SKIP] {key}")
+                    continue
+                payload = {
+                    "model": model,
+                    "messages": build_messages(workload),
+                    "think": config["generation"].get("think", False),
+                    "keep_alive": keep_alive,
+                    "options": {
+                        **{
+                            k: v
+                            for k, v in config["generation"].items()
+                            if k not in {"think", "stream", "keep_alive"}
+                        },
+                        "num_predict": int(
+                            workload.get(
+                                "num_predict", config["generation"].get("num_predict", 256)
                             )
-                            compliance = {
-                                "valid": False,
-                                "checks": {"cold_unload_verified": False},
-                                "failed_checks": ["cold_unload_verified"],
-                            }
-                        swap_after = parse_swap_used_bytes()
-                        record = {
-                            "schema_version": SCHEMA_VERSION,
-                            "execution_key": key
-                            if error is None
-                            else f"failed:{key}:{utc_now().isoformat()}",
-                            "measurement_key": key,
-                            "run_id": run_id,
-                            "eligible_for_main_score": eligible,
-                            "power_condition": power["condition"],
-                            "model": model,
-                            "workload_id": workload["id"],
-                            "temperature_state": state,
-                            "cold_unload_verified": unloaded,
-                            "run_index": index,
-                            "started_at_utc": started.isoformat(),
-                            "completed_at_utc": utc_now().isoformat(),
-                            "wall_seconds": wall,
-                            "metrics": metrics,
-                            "model_ps": ps,
-                            "swap_before_bytes": swap_before,
-                            "swap_after_bytes": swap_after,
-                            "swap_delta_bytes": (swap_after - swap_before)
-                            if swap_before is not None and swap_after is not None
-                            else None,
-                            "runner_error": error,
-                            "workload_compliance": compliance,
-                            "exchange": exchange,
-                        }
-                        append_jsonl(records_path, record)
-                        if error is None:
-                            completed.add(key)
-                        done += 1
-                        print(
-                            f"[{state.upper()}] {done}/{total} "
-                            f"gen={metrics.get('generation_tokens_per_second')} tok/s "
-                            f"prompt={metrics.get('prompt_tokens_per_second')} tok/s "
-                            f"error={error or '-'}"
+                        ),
+                    },
+                }
+                started_ttft = utc_now()
+                try:
+                    result = streaming_ttft(base, payload, workload)
+                    error = None
+                except Exception as exc:
+                    if classify_failure(exc) == "benchmark_integrity_failure":
+                        record_integrity_failure(
+                            integrity_path,
+                            phase="execution",
+                            component="ttft",
+                            operation="streaming_ttft",
+                            exc=exc,
+                            execution_key=key,
                         )
-
-                for index in range(1, ttft_runs + 1):
-                    ttft_key = f"ttft:{model}:{workload['id']}:{index}"
-                    if ttft_key in completed_ttft:
-                        print(f"[SKIP] {ttft_key}")
-                        continue
-                    payload = {
-                        "model": model,
-                        "messages": build_messages(workload),
-                        "think": config["generation"].get("think", False),
-                        "keep_alive": keep_alive,
-                        "options": {
-                            **{
-                                k: v
-                                for k, v in config["generation"].items()
-                                if k not in {"think", "stream", "keep_alive"}
-                            },
-                            "num_predict": int(
-                                workload.get(
-                                    "num_predict", config["generation"].get("num_predict", 256)
-                                )
-                            ),
+                        raise BenchmarkIntegrityFailure(
+                            "fallo de integridad durante la medición TTFT"
+                        ) from None
+                    result = {
+                        "ttft_seconds": None,
+                        "observed_ttft_seconds": None,
+                        "stream_total_seconds": None,
+                        "chunks": 0,
+                        "final_metrics": {},
+                        "reconstructed_response": {},
+                        "workload_compliance": {
+                            "valid": False,
+                            "checks": {},
+                            "failed_checks": ["execution_failure"],
                         },
                     }
-                    try:
-                        result = streaming_ttft(base, payload)
-                        error = None
-                    except Exception as exc:
-                        result = {}
-                        error = f"{type(exc).__name__}: {exc}"
-                    append_jsonl(
-                        ttft_path,
-                        {
-                            "schema_version": SCHEMA_VERSION,
-                            "execution_key": ttft_key
-                            if error is None
-                            else f"failed:{ttft_key}:{utc_now().isoformat()}",
-                            "measurement_key": ttft_key,
-                            "model": model,
-                            "workload_id": workload["id"],
-                            "run_index": index,
-                            "eligible_for_main_score": eligible,
-                            "runner_error": error,
-                            **result,
-                        },
-                    )
-                    if error is None:
-                        completed_ttft.add(ttft_key)
-                unload_model(model, base)
-                wait_until_unloaded(model, base)
-                append_jsonl(
-                    run_dir / "performance_system_snapshots.jsonl",
+                    error = sanitize_text(f"{type(exc).__name__}: {exc}")
+                append_primary_record(
+                    ttft_path,
+                    "ttft",
                     {
-                        "event": "model_end",
+                        "schema_version": 3,
+                        "run_id": run_id,
+                        "execution_key": key,
+                        "measurement_key": key,
+                        "status": "completed" if error is None else "execution_failure",
                         "model": model,
-                        "workload": workload["id"],
-                        "snapshot": system_snapshot(base),
+                        "workload_id": workload["id"],
+                        "run_index": index,
+                        "eligible_for_main_score": eligible,
+                        "power_condition": power["condition"],
+                        "started_at_utc": started_ttft.isoformat(),
+                        "completed_at_utc": utc_now().isoformat(),
+                        "runner_error": error,
+                        **result,
                     },
+                    run_plan,
                 )
-                if between_models:
-                    time.sleep(between_models)
+                if error is None:
+                    completed_ttft.add(key)
+                continue
+            if key in completed:
+                print(f"[SKIP] {key}")
+                continue
+            if state == "cold":
+                unload_model(model, base)
+                unloaded = wait_until_unloaded(model, base)
+                if after_unload:
+                    time.sleep(after_unload)
+            else:
+                unloaded = None
+            swap_before = parse_swap_used_bytes()
+            started = utc_now()
+            error = None
+            try:
+                exchange, wall = run_response(base, model, workload, config, keep_alive)
+                metrics = metric_rates(exchange["response"])
+                ps = model_ps_snapshot(model, base)
+                compliance = validate_workload_response(workload, exchange["response"])
+            except Exception as exc:
+                if classify_failure(exc) == "benchmark_integrity_failure":
+                    record_integrity_failure(
+                        integrity_path,
+                        phase="execution",
+                        component="performance",
+                        operation="run_response",
+                        exc=exc,
+                        execution_key=key,
+                    )
+                    raise BenchmarkIntegrityFailure(
+                        "fallo de integridad durante la medición de rendimiento"
+                    ) from None
+                exchange, wall, metrics, ps = {}, None, {}, None
+                compliance = {"valid": False, "checks": {}, "failed_checks": ["runner_error"]}
+                error = sanitize_text(f"{type(exc).__name__}: {exc}")
+            if state == "cold" and not unloaded:
+                error = error or "ColdUnloadError: no se confirmó la descarga del modelo"
+                compliance = {
+                    "valid": False,
+                    "checks": {"cold_unload_verified": False},
+                    "failed_checks": ["cold_unload_verified"],
+                }
+            swap_after = parse_swap_used_bytes()
+            record = {
+                "schema_version": 3,
+                "execution_key": key,
+                "measurement_key": key,
+                "status": "completed" if error is None else "execution_failure",
+                "run_id": run_id,
+                "eligible_for_main_score": eligible,
+                "power_condition": power["condition"],
+                "model": model,
+                "workload_id": workload["id"],
+                "temperature_state": state,
+                "cold_unload_verified": unloaded,
+                "run_index": index,
+                "started_at_utc": started.isoformat(),
+                "completed_at_utc": utc_now().isoformat(),
+                "wall_seconds": wall,
+                "metrics": metrics,
+                "model_ps": ps,
+                "swap_before_bytes": swap_before,
+                "swap_after_bytes": swap_after,
+                "swap_delta_bytes": (swap_after - swap_before)
+                if swap_before is not None and swap_after is not None
+                else None,
+                "runner_error": error,
+                "workload_compliance": compliance,
+                "exchange": exchange,
+            }
+            append_primary_record(records_path, "performance", record, run_plan)
+            if error is None:
+                completed.add(key)
+            done += 1
+            print(
+                f"[{state.upper()}] {done}/{total} "
+                f"gen={metrics.get('generation_tokens_per_second')} tok/s "
+                f"prompt={metrics.get('prompt_tokens_per_second')} tok/s "
+                f"error={error or '-'}"
+            )
+    except BenchmarkIntegrityFailure as exc:
+        print(f"ERROR: {sanitize_text(exc)}", file=sys.stderr)
+        return 6
     except KeyboardInterrupt:
         print("Interrumpido. Usa --resume para continuar.", file=sys.stderr)
         return 130
@@ -737,7 +880,7 @@ def main(argv: list[str] | None = None) -> int:
             {"event": "run_end", "snapshot": system_snapshot(base)},
         )
 
-    summary = summarize(records_path, ttft_path, run_dir, config["workload_weights"])
+    summary = summarize(records_path, ttft_path, run_dir, config["workload_weights"], plan=run_plan)
     print("===== RESUMEN DE RENDIMIENTO =====")
     for model, item in summary["models"].items():
         print(

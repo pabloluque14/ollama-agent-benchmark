@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import copy
+import hashlib
 import json
 import tempfile
 import unittest
@@ -10,9 +12,14 @@ from pathlib import Path
 from unittest import mock
 
 from ollama_agent_benchmark import functional, performance
+from ollama_agent_benchmark.common import append_jsonl, iter_jsonl
+from ollama_agent_benchmark.primary_records import append_primary_record
+from ollama_agent_benchmark.resume import validate_resume_evidence
 from ollama_agent_benchmark.run_plan import (
     create_run_plan,
     load_compatible_run_plan,
+    preflight_run_plan,
+    validate_planning_inputs,
     validate_run_plan,
 )
 
@@ -21,6 +28,17 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class RunPlanTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.case = {
+            "id": "T001",
+            "title": "Ejemplo",
+            "track": "tool_reliability",
+            "category": "single",
+            "expected": {"mode": "text_contains"},
+        }
+        snapshot = json.dumps({"schema_version": 2, "cases": [self.case]}).encode()
+        snapshot_path = "datasets/benchmark_cases_v2.json"
+        fixtures = b'{"schema_version":2,"virtual_docs":{},"virtual_files":{}}'
+        tools = b'{"schema_version":2,"tools":[]}'
         self.plan = {
             "schema_version": 3,
             "benchmark_version": "0.3.0",
@@ -29,13 +47,13 @@ class RunPlanTests(unittest.TestCase):
             "mode": "official-functional",
             "created_at_utc": "2026-09-22T12:00:00+00:00",
             "versions": {
-                "package": "0.2.0",
-                "runner": "functional-runner-v2",
-                "scheduler": "rotating_models_shuffled_cases-v2",
-                "aggregation": "v2",
-                "scoring": "v2",
-                "report": "v2",
-                "error_policy": "v2",
+                "package": "0.3.0",
+                "runner": "functional-runner-v3",
+                "scheduler": "balanced-block-v3",
+                "aggregation": "v3",
+                "scoring": "v3",
+                "report": "v3",
+                "error_policy": "classified-v3",
             },
             "ollama": {"base_url": "http://127.0.0.1:11434", "version": "0.11.0"},
             "models": [{"name": "fake:latest", "digest": "sha256:" + "a" * 64}],
@@ -68,7 +86,7 @@ class RunPlanTests(unittest.TestCase):
             },
             "calendar": [
                 {
-                    "execution_key": "R1:fake:latest:T001",
+                    "execution_key": '["functional","fake:latest","T001",1,1]',
                     "model": "fake:latest",
                     "target_id": "T001",
                     "repetition": 1,
@@ -77,7 +95,18 @@ class RunPlanTests(unittest.TestCase):
                     "position": 1,
                 }
             ],
-            "input_hashes": {"config/benchmark.json": "a" * 64},
+            "input_hashes": {
+                "config/benchmark.json": "a" * 64,
+                "config/models.lock.json": "b" * 64,
+                snapshot_path: hashlib.sha256(snapshot).hexdigest(),
+                "datasets/fixtures_v2.json": hashlib.sha256(fixtures).hexdigest(),
+                "datasets/tools_v2.json": hashlib.sha256(tools).hexdigest(),
+            },
+            "input_snapshots": {
+                snapshot_path: base64.b64encode(snapshot).decode("ascii"),
+                "datasets/fixtures_v2.json": base64.b64encode(fixtures).decode("ascii"),
+                "datasets/tools_v2.json": base64.b64encode(tools).decode("ascii"),
+            },
             "scoring_protocol": {
                 "weights": {
                     "tool_reliability": 0.4,
@@ -94,6 +123,14 @@ class RunPlanTests(unittest.TestCase):
                 },
                 "workload_weights": {"short_technical_answer": 1.0},
                 "missing_metric_policy": "incomplete_score",
+            },
+            "measurement_protocol": {
+                "metrics": ["case_pass", "track_success_rate"],
+                "compliance_policy": "dataset-contract-v2",
+                "sample_validity_policy": "all-required-evidence-v3",
+                "cell_completeness_policy": "all-planned-samples-v3",
+                "execution_failure_policy": "terminal-without-positive-metrics-v3",
+                "integrity_failure_policy": "journal-nonterminal-v3",
             },
             "environment": {"platform": "Darwin", "machine": "arm64", "power": "ac_power"},
             "official_eligible": True,
@@ -153,6 +190,135 @@ class RunPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "workload_weights"):
             validate_run_plan(plan)
 
+    def test_plan_rejects_snapshot_that_disagrees_with_locked_hash(self) -> None:
+        plan = copy.deepcopy(self.plan)
+        plan["input_snapshots"]["datasets/benchmark_cases_v2.json"] = base64.b64encode(
+            b'{"schema_version":3}'
+        ).decode("ascii")
+        with self.assertRaisesRegex(ValueError, "input_snapshots"):
+            validate_run_plan(plan)
+
+    def test_plan_rejects_selected_case_missing_from_its_snapshot(self) -> None:
+        plan = copy.deepcopy(self.plan)
+        path = "datasets/benchmark_cases_v2.json"
+        payload = b'{"schema_version":2,"cases":[{"id":"T002"}]}'
+        plan["input_snapshots"][path] = base64.b64encode(payload).decode("ascii")
+        plan["input_hashes"][path] = hashlib.sha256(payload).hexdigest()
+        with self.assertRaisesRegex(ValueError, "input_snapshots"):
+            validate_run_plan(plan)
+
+    def test_plan_rejects_duplicate_json_keys_in_snapshot(self) -> None:
+        plan = copy.deepcopy(self.plan)
+        path = "datasets/benchmark_cases_v2.json"
+        payload = b'{"schema_version":2,"schema_version":2,"cases":[{"id":"T001"}]}'
+        plan["input_snapshots"][path] = base64.b64encode(payload).decode("ascii")
+        plan["input_hashes"][path] = hashlib.sha256(payload).hexdigest()
+        with self.assertRaisesRegex(ValueError, "input_snapshots"):
+            validate_run_plan(plan)
+
+    def test_functional_record_validates_before_append_and_matches_plan(self) -> None:
+        key = self.plan["calendar"][0]["execution_key"]
+        record = {
+            "schema_version": 3,
+            "run_id": self.plan["run_id"],
+            "execution_key": key,
+            "measurement_key": key,
+            "status": "completed",
+            "eligible_for_main_score": True,
+            "power_condition": "ac_power",
+            "model": "fake:latest",
+            "repetition": 1,
+            "case": self.case,
+            "started_at_utc": "2026-09-22T12:00:00+00:00",
+            "completed_at_utc": "2026-09-22T12:00:01+00:00",
+            "wall_duration_seconds": 1.0,
+            "runner_error": None,
+            "run": {
+                "turns": [],
+                "tool_events": [],
+                "assistant_tool_turns": [],
+                "final_content": "ok",
+                "max_turns_reached": False,
+                "virtual_final_files": {},
+                "evaluation": {
+                    "passed": True,
+                    "mode": "text_contains",
+                    "checks": {"final_contains": True},
+                    "failed_checks": [],
+                },
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "records.jsonl"
+            append_primary_record(path, "functional", record, self.plan)
+            original = path.read_bytes()
+            self.assertEqual(list(iter_jsonl(path)), [record])
+            for field, value in (
+                ("measurement_key", "unknown"),
+                ("model", "other"),
+                ("status", "execution_failure"),
+            ):
+                with self.subTest(field=field):
+                    invalid = {**record, field: value}
+                    with self.assertRaisesRegex(ValueError, "registro"):
+                        append_primary_record(path, "functional", invalid, self.plan)
+                    self.assertEqual(path.read_bytes(), original)
+            append_jsonl(path, record)
+            with self.assertRaisesRegex(ValueError, "duplicadas"):
+                validate_resume_evidence(
+                    self.plan, {"functional": path}, Path(directory) / "integrity.jsonl"
+                )
+
+    def test_preflight_rejects_version_and_digest_from_materialized_plan(self) -> None:
+        expected = self.plan["models"][0]
+        for version, digest, failure in (
+            ("changed", expected["digest"], "versión"),
+            (self.plan["ollama"]["version"], "sha256:" + "b" * 64, "digest"),
+        ):
+            with self.subTest(failure=failure):
+                responses = [
+                    {"version": version},
+                    {"models": [{"name": expected["name"], "digest": digest}]},
+                ]
+                with (
+                    mock.patch(
+                        "ollama_agent_benchmark.run_plan.get_json", side_effect=responses
+                    ) as request,
+                    self.assertRaisesRegex(RuntimeError, failure),
+                ):
+                    preflight_run_plan(self.plan)
+                self.assertEqual(
+                    request.call_args_list[0].args[0], "http://127.0.0.1:11434/api/version"
+                )
+                self.assertEqual(request.call_count, 1 if failure == "versión" else 2)
+
+    def test_planning_inputs_reject_unknown_fields_without_coercion(self) -> None:
+        config = json.loads((ROOT / "config/benchmark.example.json").read_text())
+        lock = {
+            "schema_version": 3,
+            "benchmark_version": "0.3.0",
+            "ollama_base_url": "http://127.0.0.1:11434",
+            "ollama_server_version": "0.99.0-fake",
+            "models": [{"name": name, "digest": "sha256:" + "a" * 64} for name in config["models"]],
+        }
+        original = copy.deepcopy(config)
+        validate_planning_inputs(config, lock)
+        self.assertEqual(config, original)
+        lock["models"][0]["digest"] = "a" * 64
+        validate_planning_inputs(config, lock)
+        config["functional"]["repetitions"] = "3"
+        with self.assertRaisesRegex(ValueError, "functional.repetitions"):
+            validate_planning_inputs(config, lock)
+        config["functional"]["repetitions"] = 3
+        config["unknown"] = 1
+        with self.assertRaisesRegex(ValueError, "config.unknown"):
+            validate_planning_inputs(config, lock)
+        del config["unknown"]
+        config["ollama"]["base_url"] += "/?token=secret-value"
+        with self.assertRaisesRegex(ValueError, "base_url") as error:
+            validate_planning_inputs(config, lock)
+        self.assertNotIn("secret-value", str(error.exception))
+
 
 class RunPlanCliTests(unittest.TestCase):
     def test_plan_precedes_preflight_and_resume_rejects_changed_effective_values(self) -> None:
@@ -171,8 +337,8 @@ class RunPlanCliTests(unittest.TestCase):
             lock_path.write_text(
                 json.dumps(
                     {
-                        "schema_version": 2,
-                        "benchmark_version": "0.2.0",
+                        "schema_version": 3,
+                        "benchmark_version": "0.3.0",
                         "ollama_base_url": "http://127.0.0.1:11434",
                         "ollama_server_version": "0.99.0-fake",
                         "models": [{"name": "fake:latest", "digest": "sha256:" + "a" * 64}],
@@ -212,7 +378,7 @@ class RunPlanCliTests(unittest.TestCase):
                 with (
                     mock.patch.object(
                         functional,
-                        "verify_ollama_and_models",
+                        "preflight_run_plan",
                         side_effect=AssertionError("contactó Ollama"),
                     ),
                     redirect_stdout(StringIO()),
@@ -235,14 +401,14 @@ class RunPlanCliTests(unittest.TestCase):
                     )
                 self.assertIn("run v2 sin plan v3", error.getvalue())
 
-                def functional_preflight(_lock: object, _base: object) -> None:
+                def functional_preflight(_plan: object) -> None:
                     plan = validate_run_plan(json.loads((root / "runs/f/plan.json").read_text()))
                     self.assertEqual(plan["effective"]["repetitions"], 1)
                     raise RuntimeError("detenido antes de medir")
 
                 with (
                     mock.patch.object(
-                        functional, "verify_ollama_and_models", side_effect=functional_preflight
+                        functional, "preflight_run_plan", side_effect=functional_preflight
                     ),
                     redirect_stdout(StringIO()),
                     redirect_stderr(StringIO()),
@@ -253,7 +419,7 @@ class RunPlanCliTests(unittest.TestCase):
                 with (
                     mock.patch.object(
                         functional,
-                        "verify_ollama_and_models",
+                        "preflight_run_plan",
                         side_effect=AssertionError("contactó Ollama"),
                     ),
                     redirect_stdout(StringIO()),
@@ -273,6 +439,35 @@ class RunPlanCliTests(unittest.TestCase):
                     self.assertEqual(functional.main(changed), 4)
                 self.assertEqual(plan_path.read_bytes(), original)
                 self.assertFalse((root / "runs/f/records.jsonl").exists())
+
+                original_config = config_path.read_bytes()
+                original_cases = (data_dir / "benchmark_cases_v2.json").read_bytes()
+                config_path.write_text("{}")
+                (data_dir / "benchmark_cases_v2.json").write_text("{}")
+                with (
+                    mock.patch.object(
+                        functional,
+                        "preflight_run_plan",
+                        side_effect=RuntimeError("reanuda desde el plan"),
+                    ) as preflight,
+                    redirect_stdout(StringIO()),
+                    redirect_stderr(StringIO()),
+                ):
+                    self.assertEqual(
+                        functional.main(
+                            [
+                                "--mode",
+                                "official-functional",
+                                "--run-id",
+                                "f",
+                                "--resume",
+                            ]
+                        ),
+                        1,
+                    )
+                preflight.assert_called_once()
+                config_path.write_bytes(original_config)
+                (data_dir / "benchmark_cases_v2.json").write_bytes(original_cases)
 
             performance_args = [
                 "--mode",
@@ -295,7 +490,7 @@ class RunPlanCliTests(unittest.TestCase):
                 ),
             ):
 
-                def performance_preflight(_config: object) -> None:
+                def performance_preflight(_plan: object) -> None:
                     plan = validate_run_plan(json.loads((root / "runs/p/plan.json").read_text()))
                     self.assertEqual(plan["effective"]["ttft_runs"], 0)
                     self.assertFalse(
@@ -305,7 +500,7 @@ class RunPlanCliTests(unittest.TestCase):
 
                 with (
                     mock.patch.object(
-                        performance, "verify_lock", side_effect=performance_preflight
+                        performance, "preflight_run_plan", side_effect=performance_preflight
                     ),
                     redirect_stdout(StringIO()),
                     redirect_stderr(StringIO()),
@@ -315,7 +510,9 @@ class RunPlanCliTests(unittest.TestCase):
                 original = plan_path.read_bytes()
                 with (
                     mock.patch.object(
-                        performance, "verify_lock", side_effect=AssertionError("contactó Ollama")
+                        performance,
+                        "preflight_run_plan",
+                        side_effect=AssertionError("contactó Ollama"),
                     ),
                     redirect_stdout(StringIO()),
                     redirect_stderr(StringIO()),
@@ -333,20 +530,65 @@ class RunPlanCliTests(unittest.TestCase):
                 self.assertEqual(plan_path.read_bytes(), original)
                 self.assertFalse((root / "runs/p/performance_records.jsonl").exists())
 
+                config_path.write_text("{}")
+                (data_dir / "performance_workloads_v2.json").write_text("{}")
+                with (
+                    mock.patch.object(
+                        performance,
+                        "preflight_run_plan",
+                        side_effect=ValueError("reanuda desde el plan"),
+                    ) as preflight,
+                    redirect_stdout(StringIO()),
+                    redirect_stderr(StringIO()),
+                ):
+                    self.assertEqual(
+                        performance.main(
+                            [
+                                "--mode",
+                                "official-performance",
+                                "--run-id",
+                                "p",
+                                "--resume",
+                            ]
+                        ),
+                        1,
+                    )
+                preflight.assert_called_once()
+
     def test_dry_run_creates_no_canonical_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            config = root / "benchmark.json"
+            (root / "config").mkdir()
+            config = root / "config/benchmark.json"
             config.write_bytes((ROOT / "config/benchmark.example.json").read_bytes())
+            config_data = json.loads(config.read_text())
+            datasets = root / "datasets"
+            datasets.mkdir()
+            workloads_path = datasets / "performance_workloads_v2.json"
+            workloads_path.write_bytes(
+                (ROOT / "datasets/performance_workloads_v2.json").read_bytes()
+            )
+            (root / "config/models.lock.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 3,
+                        "benchmark_version": "0.3.0",
+                        "ollama_base_url": "http://127.0.0.1:11434",
+                        "ollama_server_version": "0.99.0-fake",
+                        "models": [
+                            {"name": name, "digest": "sha256:" + "a" * 64}
+                            for name in config_data["models"]
+                        ],
+                    }
+                )
+            )
             output = StringIO()
             with (
                 mock.patch.object(performance, "ROOT", root),
                 mock.patch.object(performance, "CONFIG_PATH", config),
+                mock.patch.object(performance, "WORKLOADS_PATH", workloads_path),
                 mock.patch.object(
-                    performance, "WORKLOADS_PATH", ROOT / "datasets/performance_workloads_v2.json"
-                ),
-                mock.patch.object(
-                    performance, "verify_lock", side_effect=AssertionError("contactó Ollama")
+                    performance, "preflight_run_plan", side_effect=AssertionError("contactó Ollama")
                 ),
                 redirect_stdout(output),
             ):

@@ -31,9 +31,12 @@ El dataset v2 contiene:
 
 Los casos incluyen selección de herramienta, no uso, secuencias, dependencias, JSON, recuperación de errores, confirmaciones, modificaciones exactas e inyección de instrucciones.
 
-Cada modelo realiza tres repeticiones por defecto. El orden rota y los casos se barajan con
-`order_control.seed`. Para cada caso se informa tasa bruta, mayoría estricta (empate = fallo),
-éxito en todas las repeticiones y consistencia. Repeticiones incompletas impiden un informe oficial.
+Cada modelo realiza tres repeticiones por defecto. En el plan v3, `order_control.seed` y los
+digests bloqueados fijan el orden inicial y cada repetición lo rota por caso; cambiar el orden de
+la lista de configuración no cambia la asignación de posiciones. Los casos se barajan con la misma
+seed. Para cada caso se informa tasa bruta, mayoría estricta (empate = fallo),
+éxito en todas las repeticiones y consistencia. Una ausencia puede aparecer como `N/D` en un
+informe oficial elegible, pero impide el ranking global.
 
 ### Pista de rendimiento
 
@@ -43,9 +46,13 @@ Cada combinación modelo/workload ejecuta:
 - cinco respuestas calientes;
 - tres respuestas streaming para TTFT.
 
-Las respuestas no streaming proporcionan las métricas de Ollama. Cada salida debe cumplir reglas
+En el plan v3, cada combinación de workload y tipo (`cold`, `hot`, TTFT) equilibra por separado las
+posiciones de modelos entre sus muestras. Si `ttft_runs = 0`, TTFT no está planificado y no cuenta
+como medición ausente. Las respuestas no streaming proporcionan las métricas de Ollama. Cada salida debe cumplir reglas
 deterministas del workload; una incompleta se conserva como inválida y no obtiene ventaja. Se resume
-primero por modelo/workload/estado/métrica y después se agregan workloads con pesos explícitos.
+primero por modelo/workload/estado/métrica y después se agregan workloads con pesos explícitos. Una
+celda solo tiene valor oficial cuando contiene todas las muestras planificadas y todas son válidas;
+en otro caso es `N/D` y no se recalcula con el subconjunto restante.
 
 ### Parámetros controlados
 
@@ -94,10 +101,17 @@ pseudorreplicación: tres intentos del mismo prompt no estrechan artificialmente
 
 ## Procedencia y compatibilidad
 
-Los manifests v2 guardan benchmark/runner, modelos y digests, Ollama, URL pública sin credenciales,
-generación/thinking/contexto, orden, hashes, modo y protocolo de scoring. Resume compara campos
-estables y TTFT usa una `execution_key`. El informe oficial exige conjunto exacto, elegibilidad y
-completitud. No existe conversión silenciosa desde 0.1.0.
+En `0.3.0`, el plan y los registros primarios son evidencia canónica. Cada registro se asocia a una
+clave planificada y se valida antes de persistirse. Un fallo de ejecución atribuible al sistema
+evaluado es terminal para esa clave; un fallo del harness o de atribución incierta se escribe en el
+diario de integridad, deja la clave ausente y hace el run inelegible sin penalizar al modelo.
+
+El plan v3 fija benchmark/runner, modelos y digests, Ollama, URL pública sin credenciales,
+generación/thinking/contexto, calendario, hashes, modo, métricas, validez y scoring. TTFT solo es
+oficial si el stream completo y reconstruido cumple el workload. Un run elegible puede producir
+informe oficial con `N/D`, pero solo hay ranking si todos los componentes requeridos existen. Un
+evento de integridad permite únicamente un informe diagnóstico no oficial; corrupción, duplicados o
+claves inesperadas producen rechazo sin informe. No existe conversión silenciosa desde `0.2.0`.
 
 ## Separación causal
 

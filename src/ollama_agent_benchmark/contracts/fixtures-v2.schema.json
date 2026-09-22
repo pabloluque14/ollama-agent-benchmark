@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "urn:oab:fixtures:2",
+  "type": "object", "additionalProperties": false, "required": ["schema_version", "virtual_docs", "virtual_files"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "virtual_docs": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": false, "required": ["title", "content"], "properties": {"title": {"type": "string"}, "content": {"type": "string"}}}},
+    "virtual_files": {"type": "object", "additionalProperties": {"type": "object", "additionalProperties": false, "required": ["content", "sha256", "size_bytes"], "properties": {"content": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "size_bytes": {"type": "integer", "minimum": 0}}}}
+  }
+}

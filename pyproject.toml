@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ollama-agent-benchmark"
-version = "0.2.0"
+version = "0.3.0"
 description = "Benchmark reproducible de modelos agentes locales servidos por Ollama"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -24,9 +24,13 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
   "coverage[toml]>=7.6",
+  "hypothesis>=6",
+  "jsonschema>=4",
   "mypy>=1.11",
   "ruff>=0.6",
+  "statsmodels>=0.14",
 ]
+mutation = ["cosmic-ray==8.7.0"]
 
 [project.scripts]
 oab = "ollama_agent_benchmark.cli:main"

@@ -24,11 +24,12 @@ init → lock → validate → preflight → functional → performance → repo
 
 ### Runner funcional
 
-En el desarrollo de `0.3.0`, ambos runners escriben un `plan.json` v3 validado antes de consultar
+Ambos runners escriben un `plan.json` v3 validado antes de consultar
 Ollama. Guarda los inputs bloqueados por hash, identidades, opciones, valores efectivos y el
-calendario de claves. La publicación es atómica y excluye sobrescrituras. `dry-run` no persiste
-ese plan ni registros. Los formatos v2 de registros e informes siguen activos hasta completar
-los tickets de evidencia y derivados; no deben interpretarse como el protocolo final 0.3.
+calendario de claves. El calendario usa seed e identidades bloqueadas, equilibra por caso o
+workload/tipo y se vuelve a validar antes de la ejecución. El preflight contrasta versión y digests
+contra el plan original, no contra una configuración posterior. La publicación es atómica y excluye
+sobrescrituras. `dry-run` no persiste ese plan ni registros.
 
 Conserva la conversación completa. Cuando el modelo solicita una herramienta:
 
@@ -49,9 +50,9 @@ Separa:
 
 ### Informe
 
-Combina los dos runs y genera JSON, CSV, Markdown y SVG sin dependencias externas.
-Antes compara manifests v2 completos. Los pesos proceden del experimento guardado, no de la
-configuración presente al informar.
+Combina los dos runs desde planes y registros canónicos v3 y genera JSON, CSV, Markdown y SVG sin
+dependencias externas. Rechaza corrupción o incompatibilidad antes de crear salida. Los pesos,
+métricas y políticas proceden del plan guardado, no de la configuración presente al informar.
 
 ### Infraestructura común y pruebas
 
@@ -59,10 +60,15 @@ configuración presente al informar.
 descarga, métricas, lock, timestamps y hashes. `tests/fake_ollama.py` implementa los endpoints
 necesarios mediante la biblioteca estándar; CI nunca utiliza Ollama real.
 
+En `0.3.0`, cada registro primario pasa por su contrato v3 antes del append. El lector JSONL valida
+el artefacto completo y falla ante UTF-8 inválido, línea vacía, truncamiento, JSON malformado o raíz
+que no sea objeto. El diario de integridad usa el mismo almacenamiento durable y una clasificación
+conservadora: ante atribución incierta, el fallo pertenece al benchmark y no al modelo.
+
 ## Formatos
 
-- JSON para manifests y resúmenes.
-- JSONL para eventos y ejecuciones completas.
+- JSON para planes, contratos, resúmenes e informes.
+- JSONL para registros primarios y diario de integridad.
 - CSV para análisis tabular.
 - Markdown para lectura humana.
 - SVG para gráficas portables.

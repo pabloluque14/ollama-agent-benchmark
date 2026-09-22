@@ -60,7 +60,7 @@ Se captura antes y después de cada ejecución en macOS. Un aumento sostenido pu
 
 ## Puntuación de velocidad
 
-Componentes v0.2.0:
+Componentes conservados en v0.3.0:
 
 - generation tok/s: 35 %;
 - prompt tok/s: 20 %;
@@ -98,10 +98,11 @@ Se informa cuántos casos fueron superados en todas las repeticiones. Un modelo 
 
 ## Cumplimiento y datos ausentes
 
-Los workloads pueden exigir tokens mínimos, contenido, regex o estructura. Un fallo se conserva y
-se excluye de la métrica válida sin ocultarlo. `None` se presenta como `N/D`: nunca se transforma en
-swap cero, memoria cero, TTFT instantáneo ni score perfecto. La política inicial declara el score
-incompleto; no renormaliza categorías arbitrariamente.
+Los workloads pueden exigir tokens mínimos, contenido, regex o estructura. Una celda solo se agrega
+si están presentes y son válidas todas sus muestras planificadas. Si una falla o falta, toda la
+celda es `N/D`; no se calcula con el subconjunto restante. `None` nunca se transforma en swap cero,
+memoria cero, TTFT instantáneo ni score perfecto. `ttft_runs = 0` significa que TTFT no fue
+planificado y, por tanto, no crea una celda `N/D`.
 
 Los valores de velocidad/memoria son relativos al mejor del mismo conjunto de modelos. Las métricas
 brutas por workload permanecen en JSON/CSV y deben acompañar cualquier comparación.

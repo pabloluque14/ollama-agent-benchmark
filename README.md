@@ -1,19 +1,16 @@
-# Ollama Agent Benchmark v0.2.0
+# Ollama Agent Benchmark v0.3.0
 
 Benchmark local, reproducible y auditable para comparar modelos servidos por Ollama antes de
 utilizarlos como agentes con herramientas.
 
-> Estado: versión `0.2.0` experimental. Las herramientas del benchmark son virtuales: los modelos
+> Estado: versión `0.3.0` experimental. Las herramientas del benchmark son virtuales: los modelos
 > no reciben acceso a la shell, a tus archivos ni a aplicaciones reales. Los runs de `0.1.0` no son
 > compatibles con esta versión.
 
-La evolución hacia `0.3.0` está en curso. Los runners ya materializan `runs/<run-id>/plan.json`
-con el modo, los valores efectivos, las identidades y el calendario antes del preflight y de
-medir. El archivo no se sobrescribe; una reanudación con valores distintos se rechaza. `dry-run`
-solo previsualiza y no crea evidencia. Los manifests, registros e informes aún conservan el
-formato `0.2.0`: este corte no constituye todavía un run oficial completo de `0.3.0`.
-Un run anterior que solo tenga manifest v2 no se puede reanudar en esta rama; no existe migración
-automática. Termínalo con `0.2.0` o inicia otro run cuando finalice la implementación de `0.3.0`.
+Los runners materializan `runs/<run-id>/plan.json` antes del preflight y guardan registros
+primarios v3 append-only. Reanudación, agregación e informe leen el plan original; `dry-run` solo
+previsualiza y `smoke` es exploratorio. Un run `0.2.0` no puede reanudarse, mezclarse, migrarse ni
+reinterpretarse como `0.3.0`.
 
 ## Documentación del proyecto
 
@@ -25,7 +22,8 @@ Si buscas una explicación especializada, puedes abrir directamente estos docume
 - [Configuración de modelos](docs/model-configuration.md): tags, digests, contexto, sampling y thinking.
 - [Arquitectura](docs/architecture.md): componentes, formatos y flujo interno.
 - [Limitaciones](docs/limitations.md): qué conclusiones permite y cuáles no.
-- [Migración desde 0.1.0](docs/migration-0.2.0.md): por qué hay que repetir los runs antiguos.
+- [Migración a 0.3.0](docs/migration-0.3.0.md): por qué hay que repetir los runs anteriores.
+- [Contratos v3](docs/schemas.md): inventario de schemas y validación runtime.
 - [Recuperación después de formatear](docs/restore-after-format.md): proyecto, digests y pesos.
 - [Referencias oficiales](docs/references.md): documentación de Ollama utilizada.
 - [Guía de contribución](CONTRIBUTING.md): tests, Ruff, Mypy y cobertura.
@@ -85,9 +83,9 @@ editar benchmark.json     elige modelos y protocolo
         ↓
 oab validate              revisión estática, sin Ollama
         ↓
-dry-runs                  muestran los planes, sin Ollama
-        ↓
 oab lock                  fija digests y versión de Ollama
+        ↓
+dry-runs                  muestran los planes, sin Ollama
         ↓
 oab preflight             comprueba que el entorno está preparado
         ↓
@@ -337,12 +335,12 @@ nano config/benchmark.json
 
 En `nano`, guarda con `Ctrl+O`, confirma con `Enter` y sal con `Ctrl+X`.
 
-La configuración de ejemplo de v0.2.0 es:
+La configuración de ejemplo de v0.3.0 es:
 
 ```json
 {
-  "schema_version": 2,
-  "benchmark_version": "0.2.0",
+  "schema_version": 3,
+  "benchmark_version": "0.3.0",
   "models": [
     "gemma4:12b-mlx",
     "gemma4:12b-it-qat",
@@ -409,12 +407,13 @@ La configuración de ejemplo de v0.2.0 es:
 | Campo | Qué significa | Cuándo cambiarlo |
 |---|---|---|
 | `schema_version` | Versión del formato de configuración | No lo cambies manualmente |
-| `benchmark_version` | Versión del protocolo | Debe ser `0.2.0` |
+| `benchmark_version` | Versión del protocolo | Debe ser `0.3.0` |
 | `models` | Tags exactos de Ollama que se compararán | Cambia la lista por los modelos instalados |
 | `ollama.base_url` | Dirección de la API local | Mantén `127.0.0.1:11434` salvo configuración local deliberada |
 
-El orden de `models` es el punto de partida. El runner rota el orden entre repeticiones para reducir
-el sesgo de posición. Todos los modelos de un informe oficial deben participar en ambos runs.
+En el plan v3, el orden de `models` no determina la primera posición: se aplica una permutación
+determinista por seed e identidad bloqueada y después una rotación equilibrada por bloque. Todos
+los modelos de un informe oficial deben participar en ambos runs.
 
 Comprueba los nombres instalados:
 
@@ -545,7 +544,8 @@ detienen antes de contactar con Ollama.
 
 ### Por qué se hace
 
-Sirven para verificar el tamaño del experimento y las selecciones antes de cargar modelos.
+Sirven para verificar el tamaño del experimento y las selecciones antes de cargar modelos. Requieren
+un lock local ya creado para reconstruir el calendario exacto, pero no consultan Ollama.
 
 ### Contacto y archivos
 

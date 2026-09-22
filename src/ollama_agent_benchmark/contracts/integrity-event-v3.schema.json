@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:oab:integrity-event:3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event_id", "timestamp_utc", "category", "phase", "code", "description", "component", "operation", "execution_key", "persistence_compromised"],
+  "properties": {
+    "schema_version": {"const": 3},
+    "event_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+    "timestamp_utc": {"type": "string", "minLength": 1},
+    "category": {"const": "benchmark_integrity_failure"},
+    "phase": {"enum": ["execution", "persistence", "resume", "aggregation", "report"]},
+    "code": {"type": "string", "pattern": "^[a-z][a-z0-9_]+$"},
+    "description": {"type": "string", "minLength": 1},
+    "component": {"enum": ["functional", "performance", "ttft", "storage", "report"]},
+    "operation": {"type": "string", "minLength": 1},
+    "execution_key": {"type": ["string", "null"]},
+    "persistence_compromised": {"type": "boolean"}
+  }
+}

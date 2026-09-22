@@ -17,6 +17,7 @@ Seguridad:
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import csv
 import hashlib
@@ -44,6 +45,7 @@ from .common import (
     get_json,
     load_config,
     metric_rates,
+    parse_json_strict,
     post_json,
     public_base_url,
     read_json,
@@ -54,7 +56,23 @@ from .common import (
     validate_manifest_compatibility,
     write_json_atomic,
 )
-from .run_plan import create_run_plan, load_compatible_run_plan, make_run_plan
+from .failures import (
+    BenchmarkIntegrityFailure,
+    classify_failure,
+    record_integrity_failure,
+    sanitize_text,
+)
+from .input_contracts import validate_dataset
+from .primary_records import append_primary_record
+from .resume import validate_resume_evidence
+from .run_plan import (
+    create_run_plan,
+    functional_calendar,
+    make_run_plan,
+    preflight_run_plan,
+    validate_planning_inputs,
+    validate_run_plan,
+)
 
 PROTOCOL_PATH = CONFIG_PATH
 CASES_PATH = ROOT / "datasets" / "benchmark_cases_v2.json"
@@ -103,9 +121,13 @@ def verify_inputs(require_lock: bool = True) -> dict[str, Any]:
             "models": [{"name": name} for name in protocol["models"]],
         }
     )
+    validate_planning_inputs(protocol, lock if require_lock else None)
     cases_doc = read_json(CASES_PATH)
     fixtures = read_json(FIXTURES_PATH)
     tools_doc = read_json(TOOLS_PATH)
+    validate_dataset("cases", cases_doc)
+    validate_dataset("fixtures", fixtures)
+    validate_dataset("tools", tools_doc)
 
     cases = cases_doc.get("cases")
     tools = tools_doc.get("tools")
@@ -144,6 +166,47 @@ def verify_inputs(require_lock: bool = True) -> dict[str, Any]:
         "tools_doc": tools_doc,
         "tools": tools,
         "hashes": {str(path.relative_to(ROOT)): sha256_file(path) for path in required},
+    }
+
+
+def inputs_from_functional_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Reconstruye ejecución desde el plan original, sin consultar configuración actual."""
+    documents = {
+        path: parse_json_strict(base64.b64decode(encoded).decode("utf-8"))
+        for path, encoded in plan["input_snapshots"].items()
+    }
+    cases_doc = documents["datasets/benchmark_cases_v2.json"]
+    fixtures = documents["datasets/fixtures_v2.json"]
+    tools_doc = documents["datasets/tools_v2.json"]
+    selected = set(plan["effective"]["case_ids"])
+    cases = [case for case in cases_doc["cases"] if case["id"] in selected]
+    effective = plan["effective"]
+    protocol = {
+        "models": effective["models"],
+        "ollama": {"base_url": plan["ollama"]["base_url"]},
+        "generation": plan["generation"],
+        "order_control": plan["order_control"],
+        "functional": {
+            "repetitions": effective["repetitions"],
+            "max_turns": effective["max_turns"],
+            "keep_alive": effective["keep_alive"],
+            "pause_between_models_seconds": effective["pause_seconds"],
+            "smoke_pause_seconds": effective["pause_seconds"],
+        },
+        **plan["scoring_protocol"],
+    }
+    return {
+        "lock": {
+            "ollama_server_version": plan["ollama"]["version"],
+            "models": plan["models"],
+        },
+        "protocol": protocol,
+        "cases_doc": cases_doc,
+        "cases": cases,
+        "fixtures": fixtures,
+        "tools_doc": tools_doc,
+        "tools": tools_doc["tools"],
+        "hashes": plan["input_hashes"],
     }
 
 
@@ -972,25 +1035,88 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--allow-battery",
         action="store_true",
+        default=None,
         help="Permite batería, pero marca el run como exploratorio",
     )
     parser.add_argument("--repetitions", type=int, help="Sobrescribe las repeticiones configuradas")
     args = parser.parse_args(argv)
 
-    try:
-        data = verify_inputs(require_lock=args.mode != "dry-run")
-        plan = build_plan(
-            data,
-            args.mode,
-            parse_csv_arg(args.models),
-            parse_csv_arg(args.case_ids),
-            args.repetitions,
+    if args.resume and not args.run_id:
+        print("ERROR: --resume requiere --run-id para localizar el plan original.", file=sys.stderr)
+        return 4
+    run_id = args.run_id or f"{args.mode}_{utc_now().strftime('%Y%m%dT%H%M%SZ')}"
+    run_dir = ROOT / "runs" / run_id
+    records_path = run_dir / "records.jsonl"
+    manifest_path = run_dir / "run_manifest.json"
+    plan_path = run_dir / "plan.json"
+    snapshots_path = run_dir / "system_snapshots.jsonl"
+    integrity_path = run_dir / "integrity.jsonl"
+    if args.resume and not plan_path.exists():
+        detail = (
+            "run v2 sin plan v3; no hay migración ni reanudación compatible"
+            if manifest_path.exists()
+            else "run huérfano sin plan v3"
         )
+        print(f"ERROR: --resume rechazado: {detail}.", file=sys.stderr)
+        return 4
+
+    try:
+        if args.resume:
+            run_plan = validate_run_plan(read_json(plan_path))
+            if run_plan["runner"] != "functional" or run_plan["mode"] != args.mode:
+                raise ValueError("modo o runner distinto del plan original")
+            effective = run_plan["effective"]
+            checks = (
+                (parse_csv_arg(args.models), effective["models"]),
+                (parse_csv_arg(args.case_ids), effective["case_ids"]),
+                (args.repetitions, effective["repetitions"]),
+            )
+            if any(requested is not None and requested != original for requested, original in checks):
+                raise ValueError("override efectivo distinto del plan original")
+            if (
+                args.allow_battery is not None
+                and args.allow_battery != run_plan["overrides"]["allow_battery"]
+            ):
+                raise ValueError("override allow_battery distinto del plan original")
+            data = inputs_from_functional_plan(run_plan)
+            by_id = {case["id"]: case for case in data["cases"]}
+            plan = {
+                "models": effective["models"],
+                "cases": [by_id[case_id] for case_id in effective["case_ids"]],
+                "repetitions": effective["repetitions"],
+            }
+            calendar = run_plan["calendar"]
+        else:
+            data = verify_inputs(require_lock=True)
+            plan = build_plan(
+                data,
+                args.mode,
+                parse_csv_arg(args.models),
+                parse_csv_arg(args.case_ids),
+                args.repetitions,
+            )
+            identities = [
+                {"name": item["name"], "digest": item["digest"]}
+                for item in data["lock"]["models"]
+                if item["name"] in plan["models"]
+            ]
+            calendar = functional_calendar(
+                identities,
+                [case["id"] for case in plan["cases"]],
+                plan["repetitions"],
+                data["protocol"]["order_control"]["seed"],
+            )
     except (OSError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         print(f"ERROR de validación: {exc}", file=sys.stderr)
-        return 1
-
-    sequences = model_sequences(data, plan["models"], plan["repetitions"])
+        return 4 if args.resume else 1
+    sequences = [
+        [
+            entry["model"]
+            for entry in calendar
+            if entry["repetition"] == rep and entry["target_id"] == plan["cases"][0]["id"]
+        ]
+        for rep in range(1, plan["repetitions"] + 1)
+    ]
     print("===== PLAN DEL RUNNER FUNCIONAL =====")
     print(f"Modo: {args.mode}")
     print(f"Modelos: {len(plan['models'])} -> {', '.join(plan['models'])}")
@@ -1003,42 +1129,22 @@ def main(argv: list[str] | None = None) -> int:
     print("Herramientas: simuladas en memoria; no hay shell ni escrituras reales.")
     print()
 
-    if args.mode == "dry-run":
-        print("Resultado: OK. No se llamó a Ollama ni se cargó ningún modelo.")
-        print("Hashes de entrada:")
-        for name, digest in sorted(data["hashes"].items()):
-            print(f"  {digest}  {name}")
-        return 0
-
     power = detect_power()
     acceptable_power = power["condition"] in {"ac_power", "not_applicable"}
+    allow_battery = bool(args.allow_battery)
     official_eligible = (
-        args.mode == "official-functional" and acceptable_power and not args.allow_battery
+        run_plan["official_eligible"]
+        if args.resume
+        else args.mode == "official-functional" and acceptable_power and not allow_battery
     )
-    if args.mode == "official-functional" and not acceptable_power and not args.allow_battery:
+    if args.mode == "official-functional" and not acceptable_power and not allow_battery:
         print("ERROR: el modo oficial exige que macOS indique AC Power.", file=sys.stderr)
         print(power["raw"], file=sys.stderr)
         return 3
 
-    run_id = args.run_id or f"{args.mode}_{utc_now().strftime('%Y%m%dT%H%M%SZ')}"
-    run_dir = ROOT / "runs" / run_id
-    records_path = run_dir / "records.jsonl"
-    manifest_path = run_dir / "run_manifest.json"
-    plan_path = run_dir / "plan.json"
-    snapshots_path = run_dir / "system_snapshots.jsonl"
-
     if run_dir.exists() and not args.resume:
         print(f"ERROR: ya existe {run_dir}. Usa --resume o elige otro --run-id.", file=sys.stderr)
         return 4
-    if args.resume and not plan_path.exists():
-        detail = (
-            "run v2 sin plan v3; no hay migración ni reanudación compatible"
-            if manifest_path.exists()
-            else "run huérfano sin plan v3"
-        )
-        print(f"ERROR: --resume rechazado: {detail}.", file=sys.stderr)
-        return 4
-
     functional_cfg = data["protocol"]["functional"]
     pause = (
         functional_cfg["pause_between_models_seconds"]
@@ -1046,60 +1152,56 @@ def main(argv: list[str] | None = None) -> int:
         else functional_cfg["smoke_pause_seconds"]
     )
     random_seed = data["protocol"]["order_control"]["seed"]
-    calendar = []
-    for rep_index, sequence in enumerate(sequences):
-        cases = list(plan["cases"])
-        random.Random(random_seed + rep_index).shuffle(cases)
-        for position, model in enumerate(sequence, 1):
-            for case in cases:
-                calendar.append(
-                    {
-                        "execution_key": f"R{rep_index + 1}:{model}:{case['id']}",
-                        "model": model,
-                        "target_id": case["id"],
-                        "repetition": rep_index + 1,
-                        "measurement_type": "functional",
-                        "block": f"R{rep_index + 1}:{case['id']}",
-                        "position": position,
-                    }
-                )
+    execution_keys = {
+        (entry["repetition"], entry["model"], entry["target_id"]): entry["execution_key"]
+        for entry in calendar
+    }
     try:
-        run_plan = make_run_plan(
-            run_id=run_id,
-            runner="functional",
-            mode=args.mode,
-            config=data["protocol"],
-            lock=data["lock"],
-            effective={
-                "models": plan["models"],
-                "case_ids": [case["id"] for case in plan["cases"]],
-                "repetitions": plan["repetitions"],
-                "max_turns": functional_cfg["max_turns"],
-                "keep_alive": functional_cfg["keep_alive"],
-                "pause_seconds": pause,
-            },
-            overrides={
-                "models": parse_csv_arg(args.models),
-                "case_ids": parse_csv_arg(args.case_ids),
-                "repetitions": args.repetitions,
-                "allow_battery": args.allow_battery,
-            },
-            calendar=calendar,
-            input_hashes=data["hashes"],
-            power_condition=power["condition"],
-            official_eligible=official_eligible,
-        )
-        if args.resume:
-            run_plan = load_compatible_run_plan(plan_path, run_plan)
-        else:
+        if not args.resume:
+            run_plan = make_run_plan(
+                run_id=run_id,
+                runner="functional",
+                mode=args.mode,
+                config=data["protocol"],
+                lock=data["lock"],
+                effective={
+                    "models": plan["models"],
+                    "case_ids": [case["id"] for case in plan["cases"]],
+                    "repetitions": plan["repetitions"],
+                    "max_turns": functional_cfg["max_turns"],
+                    "keep_alive": functional_cfg["keep_alive"],
+                    "pause_seconds": pause,
+                },
+                overrides={
+                    "models": parse_csv_arg(args.models),
+                    "case_ids": parse_csv_arg(args.case_ids),
+                    "repetitions": args.repetitions,
+                    "allow_battery": allow_battery,
+                },
+                calendar=calendar,
+                input_hashes=data["hashes"],
+                input_snapshots={
+                    str(path.relative_to(ROOT)): base64.b64encode(path.read_bytes()).decode("ascii")
+                    for path in (CASES_PATH, FIXTURES_PATH, TOOLS_PATH)
+                },
+                power_condition=power["condition"],
+                official_eligible=official_eligible,
+            )
+        if args.mode == "dry-run":
+            print("Resultado: OK. Plan validado. No se llamó a Ollama ni se guardaron mediciones.")
+            return 0
+        if not args.resume:
             create_run_plan(plan_path, run_plan)
+        completed = validate_resume_evidence(
+            run_plan, {"functional": records_path}, integrity_path
+        )["functional"]
     except (OSError, KeyError, TypeError, ValueError) as exc:
         print(f"ERROR materializando plan: {exc}", file=sys.stderr)
         return 4
 
     base = api_base(data["protocol"])
     try:
-        ollama_state = verify_ollama_and_models(data["lock"], base)
+        ollama_state = preflight_run_plan(run_plan)
     except (OSError, urllib.error.URLError, json.JSONDecodeError, RuntimeError) as exc:
         print(f"ERROR verificando Ollama: {exc}", file=sys.stderr)
         return 1
@@ -1107,7 +1209,7 @@ def main(argv: list[str] | None = None) -> int:
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "benchmark_version": BENCHMARK_VERSION,
-        "runner_version": "functional-runner-v2",
+        "runner_version": "functional-runner-v3",
         "run_id": run_id,
         "mode": args.mode,
         "created_at_utc": utc_now().isoformat(),
@@ -1135,7 +1237,7 @@ def main(argv: list[str] | None = None) -> int:
             "missing_metric_policy": data["protocol"]["missing_metric_policy"],
         },
     }
-    if manifest_path.exists():
+    if manifest_path.exists() and not args.resume:
         try:
             validate_manifest_compatibility(
                 read_json(manifest_path),
@@ -1162,10 +1264,9 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             return 5
-    else:
+    elif not args.resume:
         write_json_atomic(manifest_path, manifest)
 
-    completed = completed_keys(records_path)
     tools_by_name = tool_map(data["tools"])
     generation = data["protocol"]["generation"]
     options = {
@@ -1200,7 +1301,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 print(f"===== R{rep_index + 1} / {model} =====")
                 for case in cases:
-                    key = f"R{rep_index + 1}:{model}:{case['id']}"
+                    key = execution_keys[rep_index + 1, model, case["id"]]
                     if key in completed:
                         print(f"[SKIP] {key}")
                         continue
@@ -1219,22 +1320,39 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         error = None
                     except Exception as exc:
+                        if classify_failure(exc) == "benchmark_integrity_failure":
+                            record_integrity_failure(
+                                integrity_path,
+                                phase="execution",
+                                component="functional",
+                                operation="run_case",
+                                exc=exc,
+                                execution_key=key,
+                            )
+                            raise BenchmarkIntegrityFailure(
+                                "fallo de integridad durante la ejecución funcional"
+                            ) from None
                         result = {
                             "turns": [],
                             "tool_events": [],
                             "assistant_tool_turns": [],
                             "final_content": "",
+                            "max_turns_reached": False,
+                            "virtual_final_files": {},
                             "evaluation": {
                                 "passed": False,
                                 "mode": case["expected"]["mode"],
                                 "checks": {"runner_error_free": False},
+                                "failed_checks": ["runner_error_free"],
                             },
                         }
-                        error = f"{type(exc).__name__}: {exc}"
+                        error = sanitize_text(f"{type(exc).__name__}: {exc}")
                     completed_at = utc_now()
                     record = {
-                        "schema_version": SCHEMA_VERSION,
+                        "schema_version": 3,
                         "execution_key": key,
+                        "measurement_key": key,
+                        "status": "completed" if error is None else "execution_failure",
                         "run_id": run_id,
                         "eligible_for_main_score": official_eligible,
                         "power_condition": power["condition"],
@@ -1253,7 +1371,7 @@ def main(argv: list[str] | None = None) -> int:
                         "runner_error": error,
                         "run": result,
                     }
-                    append_jsonl(records_path, record)
+                    append_primary_record(records_path, "functional", record, run_plan)
                     completed.add(key)
                     done_count += 1
                     status = "PASS" if result["evaluation"]["passed"] else "FAIL"
@@ -1272,6 +1390,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 if pause:
                     time.sleep(pause)
+    except BenchmarkIntegrityFailure as exc:
+        print(f"ERROR: {sanitize_text(exc)}", file=sys.stderr)
+        return 6
     except KeyboardInterrupt:
         print(
             "\nInterrumpido por el usuario. Los casos ya terminados están guardados; usa --resume.",

@@ -1,6 +1,6 @@
 {
-  "schema_version": 2,
-  "benchmark_version": "0.2.0",
+  "schema_version": 3,
+  "benchmark_version": "0.3.0",
   "models": [
     "gemma4:12b-mlx",
     "gemma4:12b-it-qat",

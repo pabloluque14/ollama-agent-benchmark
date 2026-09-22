@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:oab:ttft-record:3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "execution_key", "measurement_key", "status", "eligible_for_main_score", "power_condition", "model", "workload_id", "run_index", "started_at_utc", "completed_at_utc", "runner_error", "ttft_seconds", "observed_ttft_seconds", "stream_total_seconds", "chunks", "final_metrics", "reconstructed_response", "workload_compliance"],
+  "properties": {
+    "schema_version": {"const": 3},
+    "run_id": {"type": "string", "minLength": 1},
+    "execution_key": {"type": "string", "minLength": 1},
+    "measurement_key": {"type": "string", "minLength": 1},
+    "status": {"enum": ["completed", "execution_failure"]},
+    "eligible_for_main_score": {"type": "boolean"},
+    "power_condition": {"enum": ["ac_power", "battery", "unknown", "not_applicable"]},
+    "model": {"type": "string", "minLength": 1},
+    "workload_id": {"type": "string", "minLength": 1},
+    "run_index": {"type": "integer", "minimum": 1},
+    "started_at_utc": {"type": "string", "minLength": 1},
+    "completed_at_utc": {"type": "string", "minLength": 1},
+    "runner_error": {"type": ["string", "null"]},
+    "ttft_seconds": {"type": ["number", "null"], "minimum": 0},
+    "observed_ttft_seconds": {"type": ["number", "null"], "minimum": 0},
+    "stream_total_seconds": {"type": ["number", "null"], "minimum": 0},
+    "chunks": {"type": "integer", "minimum": 0},
+    "final_metrics": {"type": "object", "additionalProperties": {"type": ["number", "null"]}},
+    "reconstructed_response": {"type": "object"},
+    "workload_compliance": {"type": "object", "additionalProperties": false, "required": ["valid", "checks", "failed_checks"], "properties": {
+      "valid": {"type": "boolean"}, "checks": {"type": "object", "additionalProperties": {"type": "boolean"}}, "failed_checks": {"type": "array", "items": {"type": "string"}}
+    }}
+  }
+}

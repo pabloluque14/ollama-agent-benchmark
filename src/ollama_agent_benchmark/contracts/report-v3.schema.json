@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:oab:report:3",
+  "oneOf": [
+    {"$ref": "#/$defs/official"},
+    {"$ref": "#/$defs/diagnostic"}
+  ],
+  "$defs": {
+    "official": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "benchmark_version", "kind", "eligible", "ranking_available", "created_at_utc", "provenance", "warnings", "functional", "performance", "scores", "ranking"],
+      "properties": {
+        "schema_version": {"const": 3}, "benchmark_version": {"const": "0.3.0"},
+        "kind": {"const": "official"}, "eligible": {"const": true},
+        "ranking_available": {"type": "boolean"}, "created_at_utc": {"type": "string", "minLength": 1},
+        "provenance": {"type": "object"}, "warnings": {"type": "array", "items": {"type": "string"}},
+        "functional": {"type": "object"}, "performance": {"type": "object"},
+        "scores": {"type": "object"}, "ranking": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "diagnostic": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "benchmark_version", "kind", "eligible", "ranking_available", "created_at_utc", "provenance", "reason", "integrity_events"],
+      "properties": {
+        "schema_version": {"const": 3}, "benchmark_version": {"const": "0.3.0"},
+        "kind": {"const": "diagnostic"}, "eligible": {"const": false},
+        "ranking_available": {"const": false}, "created_at_utc": {"type": "string", "minLength": 1},
+        "provenance": {"type": "object"}, "reason": {"type": "string", "minLength": 1},
+        "integrity_events": {"type": "array", "items": {"type": "object"}}
+      }
+    }
+  }
+}

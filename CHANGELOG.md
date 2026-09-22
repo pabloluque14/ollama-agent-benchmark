@@ -1,11 +1,17 @@
 # Changelog
 
-## 0.3.0 (en desarrollo)
+## 0.3.0
 
-- Primer corte: plan del run v3 inmutable antes de medir, con modo, valores efectivos y claves.
-- Los runs existentes con solo manifest v2 no se pueden reanudar en esta rama: no hay migración
-  automática; conserva el entorno `0.2.0` para terminarlos o inicia un run nuevo cuando `0.3.0`
-  esté completo. Los registros e informes actuales siguen siendo v2 durante la transición.
+- Plan v3 inmutable antes de medir, con modo, overrides efectivos, identidades, políticas,
+  calendario equilibrado y claves exactas.
+- Registros primarios y diario de integridad append-only, durables y validados sin recuperación
+  parcial de JSONL corrupto.
+- Fallos de ejecución terminales separados de fallos de integridad del benchmark.
+- Reanudación idempotente desde el plan original aunque cambien configuración o inputs actuales.
+- TTFT condicionado a stream completo, reconstrucción y cumplimiento; celdas estrictas `N/D`.
+- Informe v3 regenerable con estados oficial, diagnóstico no oficial y rechazo sin informe.
+- Contratos locales para configuración, lock, datasets, plan, registros, diario e informe.
+- Los runs `0.2.0` se rechazan: no se reanudan, mezclan, migran ni reinterpretan como `0.3.0`.
 
 ## 0.2.0
 

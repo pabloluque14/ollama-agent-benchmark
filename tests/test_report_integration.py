@@ -13,7 +13,7 @@ def write_json(path: Path, value: dict) -> None:
 
 
 class ReportIntegrationTests(unittest.TestCase):
-    def test_compatible_report_generates_all_formats_and_rejects_v1(self):
+    def test_historical_v2_runs_are_rejected_without_generating_report(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             functional_dir = root / "functional"
@@ -138,10 +138,9 @@ class ReportIntegrationTests(unittest.TestCase):
                         str(output),
                     ]
                 ),
-                0,
+                1,
             )
-            for relative in ("report.md", "report.json", "scores.csv", "charts/final_score.svg"):
-                self.assertTrue((output / relative).is_file(), relative)
+            self.assertFalse(output.exists())
 
             functional_manifest["schema_version"] = 1
             write_json(functional_dir / "run_manifest.json", functional_manifest)

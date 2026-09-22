@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:oab:functional-record:3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "execution_key", "measurement_key", "status", "eligible_for_main_score", "power_condition", "model", "repetition", "case", "started_at_utc", "completed_at_utc", "wall_duration_seconds", "runner_error", "run"],
+  "properties": {
+    "schema_version": {"const": 3},
+    "run_id": {"type": "string", "minLength": 1},
+    "execution_key": {"type": "string", "minLength": 1},
+    "measurement_key": {"type": "string", "minLength": 1},
+    "status": {"enum": ["completed", "execution_failure"]},
+    "eligible_for_main_score": {"type": "boolean"},
+    "power_condition": {"enum": ["ac_power", "battery", "unknown", "not_applicable"]},
+    "model": {"type": "string", "minLength": 1},
+    "repetition": {"type": "integer", "minimum": 1},
+    "case": {"type": "object", "additionalProperties": false, "required": ["id", "title", "track", "category", "expected"], "properties": {
+      "id": {"type": "string", "minLength": 1}, "title": {"type": "string"}, "track": {"type": "string", "minLength": 1}, "category": {"type": "string", "minLength": 1}, "expected": {"type": "object"}
+    }},
+    "started_at_utc": {"type": "string", "minLength": 1},
+    "completed_at_utc": {"type": "string", "minLength": 1},
+    "wall_duration_seconds": {"type": "number", "minimum": 0},
+    "runner_error": {"type": ["string", "null"]},
+    "run": {"type": "object", "additionalProperties": false,
+      "required": ["turns", "tool_events", "assistant_tool_turns", "final_content", "max_turns_reached", "virtual_final_files", "evaluation"],
+      "properties": {
+        "turns": {"type": "array", "items": {"type": "object"}},
+        "tool_events": {"type": "array", "items": {"type": "object"}},
+        "assistant_tool_turns": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+        "final_content": {"type": "string"},
+        "max_turns_reached": {"type": "boolean"},
+        "virtual_final_files": {"type": "object"},
+        "evaluation": {"type": "object", "additionalProperties": false, "required": ["passed", "mode", "checks", "failed_checks"], "properties": {
+          "passed": {"type": "boolean"}, "mode": {"type": "string", "minLength": 1}, "checks": {"type": "object", "additionalProperties": {"type": "boolean"}}, "failed_checks": {"type": "array", "items": {"type": "string"}}
+        }}
+      }}
+  }
+}

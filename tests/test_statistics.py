@@ -4,7 +4,12 @@ import unittest
 from pathlib import Path
 
 from ollama_agent_benchmark.performance import summarize
-from ollama_agent_benchmark.report import functional_analysis, performance_scores
+from ollama_agent_benchmark.report import (
+    exact_mcnemar,
+    functional_analysis,
+    performance_scores,
+    wilson,
+)
 
 
 def functional_record(model: str, case_id: str, repetition: int, passed: bool) -> dict:
@@ -19,6 +24,24 @@ def functional_record(model: str, case_id: str, repetition: int, passed: bool) -
 
 
 class StatisticsTests(unittest.TestCase):
+    def test_wilson_and_mcnemar_golden_cases_and_properties(self):
+        golden_wilson = {
+            (0, 1): (0.0, 0.7934506856227626),
+            (1, 1): (0.20654931437723745, 1.0),
+            (5, 10): (0.236593090512564, 0.7634069094874361),
+        }
+        for inputs, expected in golden_wilson.items():
+            with self.subTest(inputs=inputs):
+                actual = wilson(*inputs)
+                self.assertAlmostEqual(actual[0] or 0.0, expected[0], places=12)
+                self.assertAlmostEqual(actual[1] or 0.0, expected[1], places=12)
+        self.assertEqual(exact_mcnemar(0, 0), 1.0)
+        self.assertEqual(exact_mcnemar(2, 0), 0.5)
+        self.assertEqual(exact_mcnemar(5, 1), 0.21875)
+        for first in range(8):
+            for second in range(8):
+                self.assertEqual(exact_mcnemar(first, second), exact_mcnemar(second, first))
+
     def test_wilson_uses_majority_per_unique_case(self):
         records = [
             functional_record("a", "C1", 1, True),
@@ -131,6 +154,35 @@ class StatisticsTests(unittest.TestCase):
         model = result["models"]["m"]
         self.assertEqual(set(model["workloads"]), {"w1", "w2"})
         self.assertEqual(model["aggregate"]["hot_generation_tps"]["median"], 25.0)
+
+
+try:
+    from statsmodels.stats.contingency_tables import mcnemar as oracle_mcnemar
+    from statsmodels.stats.proportion import proportion_confint
+except ImportError:  # El entorno mínimo conserva los casos dorados sin el oráculo pesado.
+    oracle_mcnemar = None
+    proportion_confint = None
+
+
+@unittest.skipUnless(proportion_confint is not None, "statsmodels solo pertenece al extra dev")
+class StatisticsOracleTests(unittest.TestCase):
+    def test_wilson_matches_statsmodels_grid(self) -> None:
+        assert proportion_confint is not None
+        for total in range(1, 41):
+            for successes in range(total + 1):
+                expected = proportion_confint(successes, total, alpha=0.05, method="wilson")
+                actual = wilson(successes, total)
+                with self.subTest(successes=successes, total=total):
+                    self.assertAlmostEqual(actual[0] or 0.0, float(expected[0]), places=12)
+                    self.assertAlmostEqual(actual[1] or 0.0, float(expected[1]), places=12)
+
+    def test_exact_mcnemar_matches_statsmodels_discordances(self) -> None:
+        assert oracle_mcnemar is not None
+        for first in range(11):
+            for second in range(11):
+                expected = float(oracle_mcnemar([[0, first], [second, 0]], exact=True).pvalue)
+                with self.subTest(first=first, second=second):
+                    self.assertAlmostEqual(exact_mcnemar(first, second), expected, places=12)
 
 
 if __name__ == "__main__":

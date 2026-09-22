@@ -13,10 +13,11 @@ from ollama_agent_benchmark import cli, functional, performance, report
 from ollama_agent_benchmark.common import (
     get_json,
     load_config,
+    sha256_file,
     unload_model,
-    verify_lock,
     wait_until_unloaded,
 )
+from ollama_agent_benchmark.failures import record_integrity_failure
 from ollama_agent_benchmark.model_lock import create_lock
 from ollama_agent_benchmark.performance import (
     build_messages,
@@ -50,7 +51,7 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
                 mock.patch.object(cli, "CONFIG_PATH", root / "config/benchmark.json"),
             ):
                 self.assertEqual(cli.init_config(), 0)
-            self.assertEqual(load_config(root / "config/benchmark.json")["schema_version"], 2)
+            self.assertEqual(load_config(root / "config/benchmark.json")["schema_version"], 3)
 
     def test_lock_preflight_chat_stream_unload_and_identity_changes(self):
         with FakeOllama() as fake, tempfile.TemporaryDirectory() as tmp:
@@ -59,7 +60,7 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
             lock_path = root / "models.lock.json"
             config_path.write_text(json.dumps(test_config(fake.base_url)), encoding="utf-8")
             lock = create_lock(config_path, lock_path)
-            self.assertEqual(lock["schema_version"], 2)
+            self.assertEqual(lock["schema_version"], 3)
             with mock.patch("ollama_agent_benchmark.preflight.shutil.which", return_value=None):
                 results = run_preflight(config_path, lock_path)
             self.assertTrue(
@@ -205,11 +206,6 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
                     datasets_dir / "performance_workloads_v2.json",
                 ),
                 mock.patch.object(performance, "detect_power", return_value=power),
-                mock.patch.object(
-                    performance,
-                    "verify_lock",
-                    side_effect=lambda value: verify_lock(value, lock_path),
-                ),
             ):
                 command = [
                     "--mode",
@@ -239,6 +235,85 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
                 0,
             )
             self.assertTrue((output / "report.md").is_file())
+            document = json.loads((output / "report.json").read_text())
+            self.assertEqual(document["kind"], "official")
+            self.assertFalse(document["ranking_available"])
+            self.assertEqual(document["ranking"], [])
+
+            canonical = [
+                root / "runs" / functional_run / "plan.json",
+                root / "runs" / functional_run / "records.jsonl",
+                root / "runs" / performance_run / "plan.json",
+                root / "runs" / performance_run / "performance_records.jsonl",
+                root / "runs" / performance_run / "ttft_records.jsonl",
+            ]
+            hashes = {path: sha256_file(path) for path in canonical}
+            (root / "runs" / performance_run / "performance_summary.json").write_text("{}")
+            regenerated = root / "report-regenerated"
+            self.assertEqual(
+                report.main(
+                    [
+                        "--functional-run",
+                        str(root / "runs" / functional_run),
+                        "--performance-run",
+                        str(root / "runs" / performance_run),
+                        "--output",
+                        str(regenerated),
+                    ]
+                ),
+                0,
+            )
+            self.assertEqual(hashes, {path: sha256_file(path) for path in canonical})
+            self.assertEqual(
+                json.loads((regenerated / "report.json").read_text())["scores"],
+                document["scores"],
+            )
+
+            integrity = root / "runs" / functional_run / "integrity.jsonl"
+            record_integrity_failure(
+                integrity,
+                phase="execution",
+                component="functional",
+                operation="test",
+                exc=RuntimeError("harness"),
+            )
+            diagnostic = root / "diagnostic"
+            self.assertEqual(
+                report.main(
+                    [
+                        "--functional-run",
+                        str(root / "runs" / functional_run),
+                        "--performance-run",
+                        str(root / "runs" / performance_run),
+                        "--output",
+                        str(diagnostic),
+                    ]
+                ),
+                0,
+            )
+            diagnostic_document = json.loads((diagnostic / "report.json").read_text())
+            self.assertEqual(diagnostic_document["kind"], "diagnostic")
+            self.assertNotIn("scores", diagnostic_document)
+            self.assertFalse((diagnostic / "scores.csv").exists())
+
+            integrity.unlink()
+            records_path = root / "runs" / functional_run / "records.jsonl"
+            records_path.write_bytes(records_path.read_bytes() * 2)
+            rejected = root / "rejected"
+            self.assertEqual(
+                report.main(
+                    [
+                        "--functional-run",
+                        str(root / "runs" / functional_run),
+                        "--performance-run",
+                        str(root / "runs" / performance_run),
+                        "--output",
+                        str(rejected),
+                    ]
+                ),
+                1,
+            )
+            self.assertFalse(rejected.exists())
 
 
 if __name__ == "__main__":

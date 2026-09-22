@@ -349,6 +349,27 @@ def main(argv: list[str] | None = None) -> int:
         performance_dir = args.performance_run or locate_latest("performance")
         if not functional_dir or not performance_dir:
             raise FileNotFoundError("Falta un run funcional o de rendimiento")
+        if (
+            not (functional_dir / "plan.json").is_file()
+            or not (performance_dir / "plan.json").is_file()
+        ):
+            raise ValueError(
+                "Los runs 0.2.0 sin plan v3 no se pueden mezclar, migrar ni informar como 0.3.0"
+            )
+        if (functional_dir / "plan.json").is_file():
+            from .report_v3 import generate_report_v3
+
+            output = (
+                args.output or ROOT / "reports" / f"report_{utc_now().strftime('%Y%m%dT%H%M%SZ')}"
+            )
+            document = generate_report_v3(functional_dir, performance_dir, output)
+            print("===== INFORME GENERADO =====")
+            print(f"Estado: {document['kind']}")
+            print(f"Markdown: {output / 'report.md'}")
+            print(f"JSON: {output / 'report.json'}")
+            if document["kind"] == "official":
+                print(f"CSV: {output / 'scores.csv'}")
+            return 0
         warnings: list[str] = []
         official = True
         try:

@@ -8,6 +8,7 @@ from typing import Any
 
 from .common import ROOT, load_config
 from .functional import VirtualTools, resolve_expected
+from .input_contracts import validate_dataset
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -23,6 +24,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         fixtures = json.loads((ROOT / "datasets" / "fixtures_v2.json").read_text(encoding="utf-8"))
         tools_doc = json.loads((ROOT / "datasets" / "tools_v2.json").read_text(encoding="utf-8"))
+        workloads_doc = json.loads(
+            (ROOT / "datasets" / "performance_workloads_v2.json").read_text(encoding="utf-8")
+        )
+        validate_dataset("cases", cases_doc)
+        validate_dataset("fixtures", fixtures)
+        validate_dataset("tools", tools_doc)
+        validate_dataset("workloads", workloads_doc)
         cases = cases_doc["cases"]
         tools = tools_doc["tools"]
         ids = [x["id"] for x in cases]
