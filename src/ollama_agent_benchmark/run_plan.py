@@ -13,7 +13,7 @@ from datetime import datetime
 from functools import cache
 from typing import Any
 
-from .common import BENCHMARK_VERSION, api_base, public_base_url, utc_now
+from .common import BENCHMARK_VERSION, api_base, public_base_url, read_json, utc_now
 
 
 @cache
@@ -290,3 +290,12 @@ def create_run_plan(path: pathlib.Path, plan: dict[str, Any]) -> None:
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
+
+
+def load_compatible_run_plan(path: pathlib.Path, proposed: dict[str, Any]) -> dict[str, Any]:
+    """Conserva los bytes originales y rechaza cambios relevantes antes del preflight."""
+    original = validate_run_plan(read_json(path))
+    stable = set(proposed) - {"created_at_utc"}
+    if any(original[key] != proposed[key] for key in stable):
+        raise ValueError("plan: modo, overrides o inputs incompatibles con la reanudación")
+    return original

@@ -10,7 +10,11 @@ from pathlib import Path
 from unittest import mock
 
 from ollama_agent_benchmark import functional, performance
-from ollama_agent_benchmark.run_plan import create_run_plan, validate_run_plan
+from ollama_agent_benchmark.run_plan import (
+    create_run_plan,
+    load_compatible_run_plan,
+    validate_run_plan,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -103,6 +107,10 @@ class RunPlanTests(unittest.TestCase):
             self.assertEqual(json.loads(original), self.plan)
             with self.assertRaises(FileExistsError):
                 create_run_plan(path, self.plan)
+            self.assertEqual(path.read_bytes(), original)
+            proposed = copy.deepcopy(self.plan)
+            proposed["created_at_utc"] = "2026-09-23T12:00:00+00:00"
+            self.assertEqual(load_compatible_run_plan(path, proposed), self.plan)
             self.assertEqual(path.read_bytes(), original)
 
     def test_validator_rejects_missing_extra_and_coerced_fields(self) -> None:
@@ -213,6 +221,19 @@ class RunPlanCliTests(unittest.TestCase):
                         functional.main(["--mode", "dry-run", "--run-id", "preview"]), 0
                     )
                 self.assertFalse((root / "runs").exists())
+
+                legacy_dir = root / "runs/legacy"
+                legacy_dir.mkdir(parents=True)
+                (legacy_dir / "run_manifest.json").write_text("{}")
+                error = StringIO()
+                with redirect_stdout(StringIO()), redirect_stderr(error):
+                    self.assertEqual(
+                        functional.main(
+                            ["--mode", "official-functional", "--run-id", "legacy", "--resume"]
+                        ),
+                        4,
+                    )
+                self.assertIn("run v2 sin plan v3", error.getvalue())
 
                 def functional_preflight(_lock: object, _base: object) -> None:
                     plan = validate_run_plan(json.loads((root / "runs/f/plan.json").read_text()))

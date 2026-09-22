@@ -38,7 +38,7 @@ from .common import (
     wait_until_unloaded,
     write_json_atomic,
 )
-from .run_plan import create_run_plan, make_run_plan, validate_run_plan
+from .run_plan import create_run_plan, load_compatible_run_plan, make_run_plan
 
 WORKLOADS_PATH = ROOT / "datasets" / "performance_workloads_v2.json"
 
@@ -409,10 +409,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: ya existe {run_dir}; usa --resume o cambia --run-id", file=sys.stderr)
         return 4
     if args.resume and not plan_path.exists():
-        print(
-            "ERROR: --resume exige un plan existente; no se mezclará un run huérfano",
-            file=sys.stderr,
+        detail = (
+            "run v2 sin plan v3; no hay migración ni reanudación compatible"
+            if manifest_path.exists()
+            else "run huérfano sin plan v3"
         )
+        print(f"ERROR: --resume rechazado: {detail}.", file=sys.stderr)
         return 4
 
     lock_path = CONFIG_PATH.parent / "models.lock.json"
@@ -478,11 +480,7 @@ def main(argv: list[str] | None = None) -> int:
             official_eligible=eligible,
         )
         if args.resume:
-            original = validate_run_plan(read_json(plan_path))
-            comparable = {key: value for key, value in run_plan.items() if key != "created_at_utc"}
-            previous = {key: value for key, value in original.items() if key != "created_at_utc"}
-            if comparable != previous:
-                raise ValueError("plan: modo, overrides o inputs incompatibles con la reanudación")
+            run_plan = load_compatible_run_plan(plan_path, run_plan)
         else:
             create_run_plan(plan_path, run_plan)
     except (OSError, KeyError, TypeError, ValueError) as exc:

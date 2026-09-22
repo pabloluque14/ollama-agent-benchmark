@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 (en desarrollo)
+
+- Primer corte: plan del run v3 inmutable antes de medir, con modo, valores efectivos y claves.
+- Los runs existentes con solo manifest v2 no se pueden reanudar en esta rama: no hay migración
+  automática; conserva el entorno `0.2.0` para terminarlos o inicia un run nuevo cuando `0.3.0`
+  esté completo. Los registros e informes actuales siguen siendo v2 durante la transición.
+
 ## 0.2.0
 
 - Configuración schema 2 completa, validada y con `order_control.seed`.

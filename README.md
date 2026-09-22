@@ -12,6 +12,8 @@ con el modo, los valores efectivos, las identidades y el calendario antes del pr
 medir. El archivo no se sobrescribe; una reanudación con valores distintos se rechaza. `dry-run`
 solo previsualiza y no crea evidencia. Los manifests, registros e informes aún conservan el
 formato `0.2.0`: este corte no constituye todavía un run oficial completo de `0.3.0`.
+Un run anterior que solo tenga manifest v2 no se puede reanudar en esta rama; no existe migración
+automática. Termínalo con `0.2.0` o inicia otro run cuando finalice la implementación de `0.3.0`.
 
 ## Documentación del proyecto
 
