@@ -8,10 +8,9 @@ import json
 import pathlib
 from typing import Any
 
-from .aggregation import aggregate_performance_cells
-from .common import config_fingerprint, sha256_file, utc_now, write_json_atomic
+from .common import config_fingerprint, read_json, sha256_file, utc_now, write_json_atomic
 from .evidence import load_run_evidence
-from .performance import _weighted_metric
+from .performance import summarize
 from .run_plan import _schema, _validate
 
 
@@ -108,28 +107,6 @@ def _functional_analysis(plan: dict[str, Any], records: list[dict[str, Any]]) ->
     return {"models": result, "pairwise_mcnemar": comparisons, "records": len(records)}
 
 
-def _performance_summary(
-    plan: dict[str, Any], records: list[dict[str, Any]], ttft: list[dict[str, Any]]
-) -> dict[str, Any]:
-    models = aggregate_performance_cells(plan, records, ttft)
-    fields = [
-        "hot_prompt_tps",
-        "hot_generation_tps",
-        "hot_total_seconds",
-        "cold_load_seconds",
-        "size_vram_bytes",
-        "swap_delta_bytes",
-    ]
-    if plan["effective"]["ttft_runs"]:
-        fields.append("ttft_seconds")
-    weights = plan["scoring_protocol"]["workload_weights"]
-    for data in models.values():
-        data["aggregate"] = {
-            field: _weighted_metric(data["workloads"], field, weights) for field in fields
-        }
-    return {"models": models, "workload_weights": weights}
-
-
 def _provenance(
     functional_dir: pathlib.Path,
     performance_dir: pathlib.Path,
@@ -211,6 +188,7 @@ def generate_report_v3(
         }
         validate_report_document(document)
         output.mkdir(parents=True, exist_ok=True)
+        (output / "scores.csv").unlink(missing_ok=True)
         write_json_atomic(output / "report.json", document)
         (output / "report.md").write_text(
             "# Diagnóstico no oficial\n\nEl run no es elegible para informe, scores ni ranking oficiales.\n",
@@ -219,11 +197,29 @@ def generate_report_v3(
         return document
 
     functional = _functional_analysis(functional_plan, functional_evidence["records"]["functional"])
-    performance_summary = _performance_summary(
-        performance_plan,
-        performance_evidence["records"]["performance"],
-        performance_evidence["records"]["ttft"],
+    summary_path = performance_dir / "performance_summary.json"
+    csv_path = performance_dir / "performance_results.csv"
+    had_csv = csv_path.exists()
+    try:
+        previous_csv_hash = sha256_file(csv_path) if had_csv else None
+    except OSError:
+        previous_csv_hash = None
+    had_summary = summary_path.exists()
+    try:
+        previous_summary = read_json(summary_path) if had_summary else None
+    except (OSError, ValueError):
+        previous_summary = None
+    fresh_summary = summarize(
+        performance_dir / "performance_records.jsonl",
+        performance_dir / "ttft_records.jsonl",
+        performance_dir,
+        performance_plan["scoring_protocol"]["workload_weights"],
+        plan=performance_plan,
     )
+    performance_summary = {
+        "models": fresh_summary["models"],
+        "workload_weights": fresh_summary["workload_weights"],
+    }
     from .report import performance_scores
 
     models = [item["name"] for item in functional_plan["models"]]
@@ -258,6 +254,15 @@ def generate_report_v3(
         else []
     )
     warnings = []
+    summary_fields = ("schema_version", "benchmark_version", "models", "workload_weights", "csv")
+    if (
+        had_summary
+        and (
+            not isinstance(previous_summary, dict)
+            or any(previous_summary.get(key) != fresh_summary[key] for key in summary_fields)
+        )
+    ) or (had_csv and previous_csv_hash != sha256_file(csv_path)):
+        warnings.append("Se detectó y regeneró un derivado contradictorio u obsoleto.")
     if (output / "report.json").exists():
         warnings.append("Se descartó y regeneró un derivado previo desde evidencia canónica.")
     document = {

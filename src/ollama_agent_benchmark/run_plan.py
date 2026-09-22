@@ -191,8 +191,17 @@ def validate_run_plan(plan: Any) -> dict[str, Any]:
     effective = plan["effective"]
     if plan["measurement_protocol"] != _measurement_protocol(plan["runner"], effective):
         raise ValueError("plan.measurement_protocol: métricas o políticas incompatibles")
-    if plan["versions"]["scheduler"] != "balanced-block-v3":
-        raise ValueError("plan.versions.scheduler: algoritmo incompatible")
+    expected_versions = {
+        "package": BENCHMARK_VERSION,
+        "runner": f"{plan['runner']}-runner-v3",
+        "scheduler": "balanced-block-v3",
+        "aggregation": "v3",
+        "scoring": "v3",
+        "report": "v3",
+        "error_policy": "classified-v3",
+    }
+    if plan["versions"] != expected_versions:
+        raise ValueError("plan.versions: implementación o algoritmo incompatible")
     if plan["runner"] == "functional":
         expected_calendar = functional_calendar(
             plan["models"],

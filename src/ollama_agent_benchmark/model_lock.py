@@ -19,6 +19,7 @@ from .common import (
     sha256_text,
     write_json_atomic,
 )
+from .failures import sanitize_text
 
 
 def architecture_metadata(model_info: dict[str, Any]) -> dict[str, Any]:
@@ -104,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         lock = create_lock(args.config, args.output, args.force)
     except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        print(f"ERROR: {sanitize_text(exc)}", file=sys.stderr)
         return 1
 
     print("===== MODELOS BLOQUEADOS =====")

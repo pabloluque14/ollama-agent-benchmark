@@ -4,6 +4,8 @@ import json
 import tempfile
 import unittest
 import urllib.error
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -192,7 +194,52 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
                     functional_run,
                 ]
                 self.assertEqual(functional.main(command), 0)
-                self.assertEqual(functional.main([*command, "--resume"]), 0)
+                functional_snapshots = root / "runs" / functional_run / "system_snapshots.jsonl"
+                snapshots_before = functional_snapshots.read_bytes()
+                with mock.patch.object(
+                    functional,
+                    "preflight_run_plan",
+                    side_effect=AssertionError("un run completo no consulta Ollama"),
+                ) as preflight:
+                    self.assertEqual(functional.main([*command, "--resume"]), 0)
+                preflight.assert_not_called()
+                self.assertEqual(functional_snapshots.read_bytes(), snapshots_before)
+
+                fault_command = [*command[:-1], "functional-journal-fault"]
+                error = StringIO()
+                with (
+                    mock.patch.object(
+                        functional,
+                        "run_case",
+                        side_effect=RuntimeError("token=hidden-secret"),
+                    ),
+                    mock.patch(
+                        "ollama_agent_benchmark.failures.append_jsonl",
+                        side_effect=OSError("password=storage-secret"),
+                    ),
+                    redirect_stderr(error),
+                ):
+                    self.assertEqual(functional.main(fault_command), 6)
+                self.assertNotIn("hidden-secret", error.getvalue())
+                self.assertNotIn("storage-secret", error.getvalue())
+                self.assertFalse(
+                    (root / "runs" / "functional-journal-fault" / "records.jsonl").exists()
+                )
+
+                persistence_command = [*command[:-1], "functional-record-fault"]
+                with mock.patch.object(
+                    functional,
+                    "append_primary_record",
+                    side_effect=OSError("token=hidden-secret"),
+                ):
+                    self.assertEqual(functional.main(persistence_command), 6)
+                fault_dir = root / "runs" / "functional-record-fault"
+                self.assertFalse((fault_dir / "records.jsonl").exists())
+                self.assertEqual(
+                    json.loads((fault_dir / "integrity.jsonl").read_text())["category"],
+                    "benchmark_integrity_failure",
+                )
+                self.assertNotIn("hidden-secret", (fault_dir / "integrity.jsonl").read_text())
             functional_records = root / "runs" / functional_run / "records.jsonl"
             self.assertEqual(len(functional_records.read_text().splitlines()), 1)
 
@@ -218,7 +265,18 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
                     performance_run,
                 ]
                 self.assertEqual(performance.main(command), 0)
-                self.assertEqual(performance.main([*command, "--resume"]), 0)
+                performance_snapshots = (
+                    root / "runs" / performance_run / "performance_system_snapshots.jsonl"
+                )
+                snapshots_before = performance_snapshots.read_bytes()
+                with mock.patch.object(
+                    performance,
+                    "preflight_run_plan",
+                    side_effect=AssertionError("un run completo no consulta Ollama"),
+                ) as preflight:
+                    self.assertEqual(performance.main([*command, "--resume"]), 0)
+                preflight.assert_not_called()
+                self.assertEqual(performance_snapshots.read_bytes(), snapshots_before)
 
             output = root / "report"
             self.assertEqual(
@@ -240,6 +298,12 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
             self.assertFalse(document["ranking_available"])
             self.assertEqual(document["ranking"], [])
 
+            performance_csv = root / "runs" / performance_run / "performance_results.csv"
+            original_csv = performance_csv.read_bytes()
+            (root / "runs" / performance_run / "performance_summary.json").unlink()
+            with mock.patch.object(report, "ROOT", root):
+                self.assertEqual(report.locate_latest("performance"), root / "runs" / performance_run)
+
             canonical = [
                 root / "runs" / functional_run / "plan.json",
                 root / "runs" / functional_run / "records.jsonl",
@@ -249,6 +313,7 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
             ]
             hashes = {path: sha256_file(path) for path in canonical}
             (root / "runs" / performance_run / "performance_summary.json").write_text("{}")
+            performance_csv.write_text("derivado obsoleto", encoding="utf-8")
             regenerated = root / "report-regenerated"
             self.assertEqual(
                 report.main(
@@ -268,6 +333,15 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
                 json.loads((regenerated / "report.json").read_text())["scores"],
                 document["scores"],
             )
+            regenerated_document = json.loads((regenerated / "report.json").read_text())
+            self.assertTrue(any("derivado" in item for item in regenerated_document["warnings"]))
+            self.assertEqual(
+                json.loads(
+                    (root / "runs" / performance_run / "performance_summary.json").read_text()
+                )["models"],
+                regenerated_document["performance"]["summary"]["models"],
+            )
+            self.assertEqual(performance_csv.read_bytes(), original_csv)
 
             integrity = root / "runs" / functional_run / "integrity.jsonl"
             record_integrity_failure(
@@ -295,6 +369,21 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
             self.assertEqual(diagnostic_document["kind"], "diagnostic")
             self.assertNotIn("scores", diagnostic_document)
             self.assertFalse((diagnostic / "scores.csv").exists())
+            self.assertTrue((output / "scores.csv").exists())
+            self.assertEqual(
+                report.main(
+                    [
+                        "--functional-run",
+                        str(root / "runs" / functional_run),
+                        "--performance-run",
+                        str(root / "runs" / performance_run),
+                        "--output",
+                        str(output),
+                    ]
+                ),
+                0,
+            )
+            self.assertFalse((output / "scores.csv").exists())
 
             integrity.unlink()
             records_path = root / "runs" / functional_run / "records.jsonl"

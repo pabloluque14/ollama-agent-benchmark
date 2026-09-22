@@ -50,9 +50,10 @@ Separa:
 
 ### Informe
 
-Combina los dos runs desde planes y registros canónicos v3 y genera JSON, CSV, Markdown y SVG sin
-dependencias externas. Rechaza corrupción o incompatibilidad antes de crear salida. Los pesos,
-métricas y políticas proceden del plan guardado, no de la configuración presente al informar.
+Combina los dos runs desde planes y registros canónicos v3 y genera JSON, CSV y Markdown sin
+dependencias externas. Regenera los derivados de rendimiento desde esos registros y diagnostica
+derivados contradictorios; rechaza corrupción o incompatibilidad canónica antes de crear informe.
+Los pesos, métricas y políticas proceden del plan guardado, no de la configuración presente al informar.
 
 ### Infraestructura común y pruebas
 

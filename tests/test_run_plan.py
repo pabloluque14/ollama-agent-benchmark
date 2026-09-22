@@ -190,6 +190,14 @@ class RunPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "workload_weights"):
             validate_run_plan(plan)
 
+    def test_validator_rejects_incompatible_implementation_versions(self) -> None:
+        for component in ("package", "runner", "scheduler", "aggregation", "scoring", "report", "error_policy"):
+            with self.subTest(component=component):
+                plan = copy.deepcopy(self.plan)
+                plan["versions"][component] = "v2"
+                with self.assertRaisesRegex(ValueError, "plan.versions"):
+                    validate_run_plan(plan)
+
     def test_plan_rejects_snapshot_that_disagrees_with_locked_hash(self) -> None:
         plan = copy.deepcopy(self.plan)
         plan["input_snapshots"]["datasets/benchmark_cases_v2.json"] = base64.b64encode(
@@ -404,16 +412,21 @@ class RunPlanCliTests(unittest.TestCase):
                 def functional_preflight(_plan: object) -> None:
                     plan = validate_run_plan(json.loads((root / "runs/f/plan.json").read_text()))
                     self.assertEqual(plan["effective"]["repetitions"], 1)
-                    raise RuntimeError("detenido antes de medir")
+                    raise RuntimeError(
+                        "token=secret-value https://localhost/?api_key=url-secret"
+                    )
 
+                error = StringIO()
                 with (
                     mock.patch.object(
                         functional, "preflight_run_plan", side_effect=functional_preflight
                     ),
                     redirect_stdout(StringIO()),
-                    redirect_stderr(StringIO()),
+                    redirect_stderr(error),
                 ):
                     self.assertEqual(functional.main(functional_args), 1)
+                self.assertNotIn("secret-value", error.getvalue())
+                self.assertNotIn("url-secret", error.getvalue())
                 plan_path = root / "runs/f/plan.json"
                 original = plan_path.read_bytes()
                 with (
@@ -496,16 +509,21 @@ class RunPlanCliTests(unittest.TestCase):
                     self.assertFalse(
                         any(item["measurement_type"] == "ttft" for item in plan["calendar"])
                     )
-                    raise ValueError("detenido antes de medir")
+                    raise ValueError(
+                        "token=secret-value https://localhost/?api_key=url-secret"
+                    )
 
+                error = StringIO()
                 with (
                     mock.patch.object(
                         performance, "preflight_run_plan", side_effect=performance_preflight
                     ),
                     redirect_stdout(StringIO()),
-                    redirect_stderr(StringIO()),
+                    redirect_stderr(error),
                 ):
                     self.assertEqual(performance.main(performance_args), 1)
+                self.assertNotIn("secret-value", error.getvalue())
+                self.assertNotIn("url-secret", error.getvalue())
                 plan_path = root / "runs/p/plan.json"
                 original = plan_path.read_bytes()
                 with (

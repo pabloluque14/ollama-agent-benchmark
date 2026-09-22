@@ -29,7 +29,6 @@ import re
 import sys
 import time
 import unicodedata
-import urllib.error
 from typing import Any
 
 from .common import (
@@ -1107,7 +1106,7 @@ def main(argv: list[str] | None = None) -> int:
                 data["protocol"]["order_control"]["seed"],
             )
     except (OSError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
-        print(f"ERROR de validación: {exc}", file=sys.stderr)
+        print(f"ERROR de validación: {sanitize_text(exc)}", file=sys.stderr)
         return 4 if args.resume else 1
     sequences = [
         [
@@ -1137,9 +1136,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.resume
         else args.mode == "official-functional" and acceptable_power and not allow_battery
     )
-    if args.mode == "official-functional" and not acceptable_power and not allow_battery:
+    if (
+        not args.resume
+        and args.mode == "official-functional"
+        and not acceptable_power
+        and not allow_battery
+    ):
         print("ERROR: el modo oficial exige que macOS indique AC Power.", file=sys.stderr)
-        print(power["raw"], file=sys.stderr)
+        print(sanitize_text(power["raw"]), file=sys.stderr)
         return 3
 
     if run_dir.exists() and not args.resume:
@@ -1196,14 +1200,21 @@ def main(argv: list[str] | None = None) -> int:
             run_plan, {"functional": records_path}, integrity_path
         )["functional"]
     except (OSError, KeyError, TypeError, ValueError) as exc:
-        print(f"ERROR materializando plan: {exc}", file=sys.stderr)
+        print(f"ERROR materializando plan: {sanitize_text(exc)}", file=sys.stderr)
         return 4
+
+    if args.resume and len(completed) == len(run_plan["calendar"]):
+        print("Run completo: no quedan claves pendientes.")
+        return 0
+    if args.resume and power["condition"] != run_plan["environment"]["power"]:
+        print("ERROR: alimentación distinta del plan original.", file=sys.stderr)
+        return 3
 
     base = api_base(data["protocol"])
     try:
         ollama_state = preflight_run_plan(run_plan)
-    except (OSError, urllib.error.URLError, json.JSONDecodeError, RuntimeError) as exc:
-        print(f"ERROR verificando Ollama: {exc}", file=sys.stderr)
+    except Exception as exc:
+        print(f"ERROR verificando Ollama: {sanitize_text(exc)}", file=sys.stderr)
         return 1
 
     manifest = {
@@ -1262,7 +1273,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
         except ValueError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
+            print(f"ERROR: {sanitize_text(exc)}", file=sys.stderr)
             return 5
     elif not args.resume:
         write_json_atomic(manifest_path, manifest)
@@ -1284,8 +1295,9 @@ def main(argv: list[str] | None = None) -> int:
     total = len(plan["models"]) * len(plan["cases"]) * plan["repetitions"]
     done_count = len(completed)
 
-    append_jsonl(snapshots_path, {"event": "run_start", "snapshot": system_snapshot(base)})
+    active_key: str | None = None
     try:
+        append_jsonl(snapshots_path, {"event": "run_start", "snapshot": system_snapshot(base)})
         for rep_index in range(plan["repetitions"]):
             cases = list(plan["cases"])
             random.Random(random_seed + rep_index).shuffle(cases)
@@ -1305,6 +1317,7 @@ def main(argv: list[str] | None = None) -> int:
                     if key in completed:
                         print(f"[SKIP] {key}")
                         continue
+                    active_key = key
                     started = utc_now()
                     try:
                         result = run_case(
@@ -1372,6 +1385,7 @@ def main(argv: list[str] | None = None) -> int:
                         "run": result,
                     }
                     append_primary_record(records_path, "functional", record, run_plan)
+                    active_key = None
                     completed.add(key)
                     done_count += 1
                     status = "PASS" if result["evaluation"]["passed"] else "FAIL"
@@ -1399,10 +1413,38 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 130
+    except Exception as exc:
+        try:
+            record_integrity_failure(
+                integrity_path,
+                phase="execution",
+                component="functional",
+                operation="runner",
+                exc=exc,
+                execution_key=active_key,
+            )
+            print("ERROR: fallo de integridad del runner funcional.", file=sys.stderr)
+        except BenchmarkIntegrityFailure as journal_error:
+            print(f"ERROR: {sanitize_text(journal_error)}", file=sys.stderr)
+        return 6
     finally:
         for model in plan["models"]:
             unload_model(model, base)
-        append_jsonl(snapshots_path, {"event": "run_end", "snapshot": system_snapshot(base)})
+        try:
+            append_jsonl(snapshots_path, {"event": "run_end", "snapshot": system_snapshot(base)})
+        except Exception as exc:
+            try:
+                record_integrity_failure(
+                    integrity_path,
+                    phase="persistence",
+                    component="functional",
+                    operation="run_end_snapshot",
+                    exc=exc,
+                )
+                print("ERROR: fallo de integridad al cerrar el run funcional.", file=sys.stderr)
+            except BenchmarkIntegrityFailure as journal_error:
+                print(f"ERROR: {sanitize_text(journal_error)}", file=sys.stderr)
+            return 6
 
     summary = make_summary(records_path, run_dir)
     print()

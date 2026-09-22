@@ -7,6 +7,7 @@ from collections import Counter
 from typing import Any
 
 from .common import ROOT, load_config
+from .failures import sanitize_text
 from .functional import VirtualTools, resolve_expected
 from .input_contracts import validate_dataset
 
@@ -63,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         if mismatches:
             raise ValueError(f"Secuencias imposibles: {mismatches}")
     except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        print(f"ERROR: {sanitize_text(exc)}", file=sys.stderr)
         return 1
 
     print("===== VALIDACIÓN DEL PROYECTO =====")

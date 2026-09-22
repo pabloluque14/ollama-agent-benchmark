@@ -19,6 +19,7 @@ from .common import (
     utc_now,
     write_json_atomic,
 )
+from .failures import sanitize_text
 
 
 def wilson(
@@ -57,9 +58,8 @@ def ratio_low(value: float | None, best: float | None) -> float | None:
 def locate_latest(kind: str) -> pathlib.Path | None:
     candidates = []
     for run_dir in (ROOT / "runs").glob("*"):
-        if kind == "functional" and (run_dir / "records.jsonl").is_file():
-            candidates.append(run_dir)
-        if kind == "performance" and (run_dir / "performance_summary.json").is_file():
+        plan_path = run_dir / "plan.json"
+        if plan_path.is_file() and read_json(plan_path).get("runner") == kind:
             candidates.append(run_dir)
     return sorted(candidates)[-1] if candidates else None
 
@@ -393,7 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         functional = functional_analysis(functional_dir, models)
         perf = performance_scores(performance_summary, models, scoring["speed_weights"])
     except Exception as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        print(f"ERROR: {sanitize_text(exc)}", file=sys.stderr)
         return 1
 
     scores: dict[str, Any] = {}

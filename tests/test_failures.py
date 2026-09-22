@@ -6,7 +6,7 @@ import urllib.error
 from pathlib import Path
 from unittest import mock
 
-from ollama_agent_benchmark.common import iter_jsonl
+from ollama_agent_benchmark.common import iter_jsonl, run_command, system_snapshot
 from ollama_agent_benchmark.failures import (
     IntegrityJournalWriteError,
     append_integrity_event,
@@ -48,6 +48,10 @@ class FailurePolicyTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicado"):
                 append_integrity_event(path, event)
             self.assertEqual(path.read_bytes(), original)
+            unsafe = {**event, "event_id": "a" * 32, "execution_key": "https://user:pass@localhost"}
+            with self.assertRaisesRegex(ValueError, "execution_key"):
+                append_integrity_event(path, unsafe)
+            self.assertEqual(path.read_bytes(), original)
 
     def test_journal_write_failure_is_explicit_and_sanitized(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -68,3 +72,26 @@ class FailurePolicyTests(unittest.TestCase):
                 )
             self.assertNotIn("never-print", str(error.exception))
             self.assertFalse(path.exists())
+
+    def test_system_snapshot_sanitizes_http_errors(self) -> None:
+        with (
+            mock.patch(
+                "ollama_agent_benchmark.common.run_command",
+                return_value={"stdout": "token=private", "stderr": ""},
+            ),
+            mock.patch(
+                "ollama_agent_benchmark.common.get_json",
+                side_effect=RuntimeError("https://user:pass@localhost/?token=private"),
+            ),
+            mock.patch("ollama_agent_benchmark.common.detect_power", return_value={}),
+            mock.patch("ollama_agent_benchmark.common.parse_swap_used_bytes", return_value=0),
+        ):
+            snapshot = system_snapshot()
+        self.assertNotIn("private", str(snapshot["ollama_ps_api_error"]))
+
+    def test_command_output_is_sanitized_before_snapshot_storage(self) -> None:
+        process = mock.Mock(returncode=0, stdout="token=private", stderr="Bearer hidden")
+        with mock.patch("ollama_agent_benchmark.common.subprocess.run", return_value=process):
+            result = run_command(["ps"])
+        self.assertNotIn("private", result["stdout"])
+        self.assertNotIn("hidden", result["stderr"])

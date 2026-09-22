@@ -909,20 +909,21 @@ mejoran la puntuación.
 
 ### Qué hace
 
-Lee el run funcional y el de rendimiento, valida que proceden del mismo experimento y genera Markdown,
-JSON, CSV y SVG.
+Lee los planes y registros primarios de ambos runs, valida su compatibilidad y genera Markdown,
+JSON y CSV. Regenera el resumen y CSV de rendimiento desde la evidencia canónica.
 
 ### Por qué se hace
 
-Compartir nombres de modelos no basta. Antes de producir un ranking se comparan schema, benchmark,
-modelos, digests, versión de Ollama, contexto, thinking, generación, orden, hashes, elegibilidad y
-protocolo de scoring guardado en los manifests.
+Compartir nombres de modelos no basta. Antes de producir un ranking se validan los planes,
+registros e identidad experimental de ambos runs. Un run elegible puede generar informe oficial
+con `N/D`, pero no ranking global si faltan componentes; un fallo de integridad solo admite un
+diagnóstico no oficial. La evidencia incompatible o corrupta se rechaza sin informe.
 
 ### Contacto y archivos
 
 - No contacta con Ollama.
 - No carga modelos.
-- Lee únicamente los dos runs indicados.
+- Lee la evidencia de los dos runs y regenera sus derivados de rendimiento si faltan o difieren.
 - Crea una carpeta dentro de `reports/`.
 
 ### Comando recomendado
@@ -935,22 +936,17 @@ oab report \
 
 ### Qué deberías ver
 
-El ranking completo, si todos los componentes están disponibles, y rutas semejantes a:
+El ranking completo solo si todos los componentes están disponibles, y rutas semejantes a:
 
 ```text
 reports/report_<fecha>/
 ├── report.md
 ├── report.json
-├── scores.csv
-└── charts/
-    ├── final_score.svg
-    ├── generation_tps.svg
-    ├── memory_gib.svg
-    └── tool_reliability.svg
+└── scores.csv
 ```
 
 Abre primero `report.md`. Usa `report.json` para auditoría detallada y `scores.csv` para una hoja de
-cálculo. Las gráficas SVG son vistas; no sustituyen las métricas brutas.
+cálculo. Ninguno sustituye los registros primarios.
 
 ### Si falla
 
@@ -958,8 +954,8 @@ cálculo. Las gráficas SVG son vistas; no sustituyen las métricas brutas.
 - Run incompleto: reanuda la fase correspondiente.
 - Score `N/D`: falta un componente necesario; el modelo no se incluye silenciosamente en un ranking
   completo.
-- No uses `--allow-incompatible` para publicar un ganador. Esa opción produce únicamente un informe
-  exploratorio, con advertencias visibles y sin ranking oficial.
+- `--allow-incompatible` no habilita informes de runs v3 incompatibles ni convierte evidencia
+  antigua en evidencia 0.3.0.
 
 ## 17. Cómo interpretar el resultado
 

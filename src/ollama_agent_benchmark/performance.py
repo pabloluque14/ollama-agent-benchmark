@@ -523,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
             hot_runs = 1 if args.mode == "smoke" else int(perf.get("hot_runs", 5))
             ttft_runs = 0 if args.mode == "smoke" else int(perf.get("ttft_runs", 3))
     except (OSError, KeyError, TypeError, ValueError) as exc:
-        print(f"ERROR de validación: {exc}", file=sys.stderr)
+        print(f"ERROR de validación: {sanitize_text(exc)}", file=sys.stderr)
         return 4 if args.resume else 1
 
     by_id = {item["id"]: item for item in workloads}
@@ -545,8 +545,9 @@ def main(argv: list[str] | None = None) -> int:
         and not allow_battery
     )
     if (
-        args.mode == "official-performance"
-        and power["condition"] == "battery"
+        not args.resume
+        and args.mode == "official-performance"
+        and power["condition"] not in {"ac_power", "not_applicable"}
         and not allow_battery
     ):
         print("ERROR: el modo oficial exige AC Power en macOS.", file=sys.stderr)
@@ -619,13 +620,20 @@ def main(argv: list[str] | None = None) -> int:
             integrity_path,
         )
     except (OSError, KeyError, TypeError, ValueError) as exc:
-        print(f"ERROR materializando plan: {exc}", file=sys.stderr)
+        print(f"ERROR materializando plan: {sanitize_text(exc)}", file=sys.stderr)
         return 4
+
+    if args.resume and sum(map(len, completed_by_kind.values())) == len(run_plan["calendar"]):
+        print("Run completo: no quedan claves pendientes.")
+        return 0
+    if args.resume and power["condition"] != run_plan["environment"]["power"]:
+        print("ERROR: alimentación distinta del plan original.", file=sys.stderr)
+        return 3
 
     try:
         preflight_run_plan(run_plan)
     except Exception as exc:
-        print(f"ERROR verificando lock/Ollama: {exc}", file=sys.stderr)
+        print(f"ERROR verificando lock/Ollama: {sanitize_text(exc)}", file=sys.stderr)
         return 1
 
     manifest = {
@@ -688,7 +696,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
         except ValueError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
+            print(f"ERROR: {sanitize_text(exc)}", file=sys.stderr)
             return 5
     elif not args.resume:
         write_json_atomic(manifest_path, manifest)
@@ -698,11 +706,12 @@ def main(argv: list[str] | None = None) -> int:
     total = len(models) * len(workloads) * (cold_runs + hot_runs)
     done = len(completed)
 
-    append_jsonl(
-        run_dir / "performance_system_snapshots.jsonl",
-        {"event": "run_start", "snapshot": system_snapshot(base)},
-    )
+    active_key: str | None = None
     try:
+        append_jsonl(
+            run_dir / "performance_system_snapshots.jsonl",
+            {"event": "run_start", "snapshot": system_snapshot(base)},
+        )
         for entry in run_plan["calendar"]:
             workload = by_id[entry["target_id"]]
             model = entry["model"]
@@ -714,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
                 if key in completed_ttft:
                     print(f"[SKIP] {key}")
                     continue
+                active_key = key
                 payload = {
                     "model": model,
                     "messages": build_messages(workload),
@@ -784,12 +794,14 @@ def main(argv: list[str] | None = None) -> int:
                     },
                     run_plan,
                 )
+                active_key = None
                 if error is None:
                     completed_ttft.add(key)
                 continue
             if key in completed:
                 print(f"[SKIP] {key}")
                 continue
+            active_key = key
             if state == "cold":
                 unload_model(model, base)
                 unloaded = wait_until_unloaded(model, base)
@@ -857,6 +869,7 @@ def main(argv: list[str] | None = None) -> int:
                 "exchange": exchange,
             }
             append_primary_record(records_path, "performance", record, run_plan)
+            active_key = None
             if error is None:
                 completed.add(key)
             done += 1
@@ -872,13 +885,41 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("Interrumpido. Usa --resume para continuar.", file=sys.stderr)
         return 130
+    except Exception as exc:
+        try:
+            record_integrity_failure(
+                integrity_path,
+                phase="execution",
+                component="performance",
+                operation="runner",
+                exc=exc,
+                execution_key=active_key,
+            )
+            print("ERROR: fallo de integridad del runner de rendimiento.", file=sys.stderr)
+        except BenchmarkIntegrityFailure as journal_error:
+            print(f"ERROR: {sanitize_text(journal_error)}", file=sys.stderr)
+        return 6
     finally:
         for model in models:
             unload_model(model, base)
-        append_jsonl(
-            run_dir / "performance_system_snapshots.jsonl",
-            {"event": "run_end", "snapshot": system_snapshot(base)},
-        )
+        try:
+            append_jsonl(
+                run_dir / "performance_system_snapshots.jsonl",
+                {"event": "run_end", "snapshot": system_snapshot(base)},
+            )
+        except Exception as exc:
+            try:
+                record_integrity_failure(
+                    integrity_path,
+                    phase="persistence",
+                    component="performance",
+                    operation="run_end_snapshot",
+                    exc=exc,
+                )
+                print("ERROR: fallo de integridad al cerrar el run de rendimiento.", file=sys.stderr)
+            except BenchmarkIntegrityFailure as journal_error:
+                print(f"ERROR: {sanitize_text(journal_error)}", file=sys.stderr)
+            return 6
 
     summary = summarize(records_path, ttft_path, run_dir, config["workload_weights"], plan=run_plan)
     print("===== RESUMEN DE RENDIMIENTO =====")

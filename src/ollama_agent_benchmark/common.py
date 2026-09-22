@@ -32,6 +32,22 @@ API_DEFAULT = "http://127.0.0.1:11434"
 BENCHMARK_VERSION = "0.3.0"
 SCHEMA_VERSION = 3
 
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(token|api[_-]?key|authorization|password|secret)\b(\s*[:=]\s*)([^\s,;]+)"
+)
+_URL = re.compile(r"https?://[^\s<>'\"]+")
+
+
+def sanitize_text(value: object) -> str:
+    """Sanea texto de diagnóstico antes de mostrarlo o persistirlo."""
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    text = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer [REDACTED]", text)
+    text = _SECRET_ASSIGNMENT.sub(
+        lambda match: match.group(1) + match.group(2) + "[REDACTED]", text
+    )
+    text = _URL.sub("[REDACTED_URL]", text)
+    return text[:1000] or "error sin detalle"
+
 
 def utc_now() -> dt.datetime:
     return dt.datetime.now(dt.UTC)
@@ -149,11 +165,11 @@ def run_command(command: list[str], timeout: int = 30) -> dict[str, Any]:
         return {
             "command": command,
             "returncode": result.returncode,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "stdout": sanitize_text(result.stdout) if result.stdout else "",
+            "stderr": sanitize_text(result.stderr) if result.stderr else "",
         }
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return {"command": command, "error": str(exc)}
+        return {"command": command, "error": sanitize_text(exc)}
 
 
 def detect_power() -> dict[str, str]:
@@ -203,7 +219,7 @@ def system_snapshot(base_url: str | None = None) -> dict[str, Any]:
     try:
         snapshot["ollama_ps_api"] = get_json(base + "/api/ps", timeout=10)
     except Exception as exc:  # snapshot must not crash a run
-        snapshot["ollama_ps_api_error"] = str(exc)
+        snapshot["ollama_ps_api_error"] = sanitize_text(exc)
     return snapshot
 
 
