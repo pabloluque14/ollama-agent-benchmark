@@ -28,6 +28,7 @@ from .common import (
     parse_swap_used_bytes,
     post_json,
     public_base_url,
+    read_json,
     sha256_file,
     system_snapshot,
     unload_model,
@@ -37,6 +38,7 @@ from .common import (
     wait_until_unloaded,
     write_json_atomic,
 )
+from .run_plan import create_run_plan, make_run_plan, validate_run_plan
 
 WORKLOADS_PATH = ROOT / "datasets" / "performance_workloads_v2.json"
 
@@ -382,12 +384,6 @@ def main(argv: list[str] | None = None) -> int:
         print("Resultado: OK. No se llamó a Ollama ni se cargó ningún modelo.")
         return 0
 
-    try:
-        lock = verify_lock(config)
-    except Exception as exc:
-        print(f"ERROR verificando lock/Ollama: {exc}", file=sys.stderr)
-        return 1
-
     power = detect_power()
     eligible = (
         args.mode == "official-performance"
@@ -408,16 +404,96 @@ def main(argv: list[str] | None = None) -> int:
     records_path = run_dir / "performance_records.jsonl"
     ttft_path = run_dir / "ttft_records.jsonl"
     manifest_path = run_dir / "performance_manifest.json"
+    plan_path = run_dir / "plan.json"
     if run_dir.exists() and not args.resume:
         print(f"ERROR: ya existe {run_dir}; usa --resume o cambia --run-id", file=sys.stderr)
         return 4
-    if args.resume and not manifest_path.exists():
+    if args.resume and not plan_path.exists():
         print(
-            "ERROR: --resume exige un manifest existente; no se mezclará un run huérfano",
+            "ERROR: --resume exige un plan existente; no se mezclará un run huérfano",
             file=sys.stderr,
         )
         return 4
-    run_dir.mkdir(parents=True, exist_ok=True)
+
+    lock_path = CONFIG_PATH.parent / "models.lock.json"
+    keep_alive = perf["keep_alive"]
+    after_unload = perf["pause_after_unload_seconds"]
+    between_models = perf["pause_between_models_seconds"]
+    calendar = []
+    for workload_index, workload in enumerate(workloads):
+        sequence = models[workload_index % len(models) :] + models[: workload_index % len(models)]
+        for position, model in enumerate(sequence, 1):
+            for state, count in (("cold", cold_runs), ("hot", hot_runs), ("ttft", ttft_runs)):
+                for index in range(1, count + 1):
+                    key = (
+                        f"ttft:{model}:{workload['id']}:{index}"
+                        if state == "ttft"
+                        else f"{model}:{workload['id']}:{state}:{index}"
+                    )
+                    calendar.append(
+                        {
+                            "execution_key": key,
+                            "model": model,
+                            "target_id": workload["id"],
+                            "repetition": index,
+                            "measurement_type": state,
+                            "block": f"{workload['id']}:{state}:{index}",
+                            "position": position,
+                        }
+                    )
+    try:
+        lock = read_json(lock_path)
+        run_plan = make_run_plan(
+            run_id=run_id,
+            runner="performance",
+            mode=args.mode,
+            config=config,
+            lock=lock,
+            effective={
+                "models": models,
+                "workload_ids": [item["id"] for item in workloads],
+                "cold_runs": cold_runs,
+                "hot_runs": hot_runs,
+                "ttft_runs": ttft_runs,
+                "keep_alive": keep_alive,
+                "pause_after_unload_seconds": after_unload,
+                "pause_between_models_seconds": between_models,
+            },
+            overrides={
+                "models": [x.strip() for x in args.models.split(",") if x.strip()]
+                if args.models
+                else None,
+                "workloads": [x.strip() for x in args.workloads.split(",") if x.strip()]
+                if args.workloads
+                else None,
+                "allow_battery": args.allow_battery,
+            },
+            calendar=calendar,
+            input_hashes={
+                str(CONFIG_PATH.relative_to(ROOT)): sha256_file(CONFIG_PATH),
+                str(lock_path.relative_to(ROOT)): sha256_file(lock_path),
+                str(WORKLOADS_PATH.relative_to(ROOT)): sha256_file(WORKLOADS_PATH),
+            },
+            power_condition=power["condition"],
+            official_eligible=eligible,
+        )
+        if args.resume:
+            original = validate_run_plan(read_json(plan_path))
+            comparable = {key: value for key, value in run_plan.items() if key != "created_at_utc"}
+            previous = {key: value for key, value in original.items() if key != "created_at_utc"}
+            if comparable != previous:
+                raise ValueError("plan: modo, overrides o inputs incompatibles con la reanudación")
+        else:
+            create_run_plan(plan_path, run_plan)
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        print(f"ERROR materializando plan: {exc}", file=sys.stderr)
+        return 4
+
+    try:
+        lock = verify_lock(config)
+    except Exception as exc:
+        print(f"ERROR verificando lock/Ollama: {exc}", file=sys.stderr)
+        return 1
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -501,9 +577,6 @@ def main(argv: list[str] | None = None) -> int:
         else set()
     )
 
-    keep_alive = str(perf.get("keep_alive", "5m"))
-    after_unload = float(perf.get("pause_after_unload_seconds", 10))
-    between_models = float(perf.get("pause_between_models_seconds", 30))
     order = models
     total = len(models) * len(workloads) * (cold_runs + hot_runs)
     done = len(completed)

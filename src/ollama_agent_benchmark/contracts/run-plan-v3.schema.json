@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:oab:run-plan:3",
+  "title": "Ollama Agent Benchmark run plan v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "benchmark_version", "run_id", "runner", "mode", "created_at_utc", "versions", "ollama", "models", "generation", "order_control", "effective", "overrides", "calendar", "input_hashes", "scoring_protocol", "environment", "official_eligible"],
+  "properties": {
+    "schema_version": {"const": 3},
+    "benchmark_version": {"const": "0.3.0"},
+    "run_id": {"type": "string", "pattern": "^(?!\\.{1,2}$)[A-Za-z0-9_.-]+$"},
+    "runner": {"enum": ["functional", "performance"]},
+    "mode": {"enum": ["smoke", "official-functional", "official-performance"]},
+    "created_at_utc": {"type": "string", "minLength": 1},
+    "versions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["package", "runner", "scheduler", "aggregation", "scoring", "report", "error_policy"],
+      "properties": {
+        "package": {"$ref": "#/$defs/nonempty"}, "runner": {"$ref": "#/$defs/nonempty"},
+        "scheduler": {"$ref": "#/$defs/nonempty"}, "aggregation": {"$ref": "#/$defs/nonempty"},
+        "scoring": {"$ref": "#/$defs/nonempty"}, "report": {"$ref": "#/$defs/nonempty"},
+        "error_policy": {"$ref": "#/$defs/nonempty"}
+      }
+    },
+    "ollama": {
+      "type": "object", "additionalProperties": false, "required": ["base_url", "version"],
+      "properties": {"base_url": {"$ref": "#/$defs/nonempty"}, "version": {"$ref": "#/$defs/nonempty"}}
+    },
+    "models": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/model"}},
+    "generation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["num_ctx", "temperature", "seed", "top_k", "top_p", "min_p", "repeat_penalty", "presence_penalty", "num_predict", "think"],
+      "properties": {
+        "num_ctx": {"$ref": "#/$defs/positive_int"}, "temperature": {"$ref": "#/$defs/number"},
+        "seed": {"type": "integer"}, "top_k": {"$ref": "#/$defs/positive_int"},
+        "top_p": {"$ref": "#/$defs/number"}, "min_p": {"$ref": "#/$defs/number"},
+        "repeat_penalty": {"$ref": "#/$defs/number"}, "presence_penalty": {"$ref": "#/$defs/number"},
+        "num_predict": {"$ref": "#/$defs/positive_int"}, "think": {"type": "boolean"}
+      }
+    },
+    "order_control": {
+      "type": "object", "additionalProperties": false, "required": ["seed", "policy"],
+      "properties": {"seed": {"type": "integer"}, "policy": {"$ref": "#/$defs/nonempty"}}
+    },
+    "effective": {"oneOf": [{"$ref": "#/$defs/functional_effective"}, {"$ref": "#/$defs/performance_effective"}]},
+    "overrides": {"oneOf": [{"$ref": "#/$defs/functional_overrides"}, {"$ref": "#/$defs/performance_overrides"}]},
+    "calendar": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/calendar_entry"}},
+    "input_hashes": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "scoring_protocol": {
+      "type": "object", "additionalProperties": false,
+      "required": ["weights", "speed_weights", "workload_weights", "missing_metric_policy"],
+      "properties": {
+        "weights": {"type": "object", "additionalProperties": false,
+          "required": ["tool_reliability", "quality_reasoning", "speed", "memory_stability"],
+          "properties": {"tool_reliability": {"$ref": "#/$defs/nonnegative_number"}, "quality_reasoning": {"$ref": "#/$defs/nonnegative_number"}, "speed": {"$ref": "#/$defs/nonnegative_number"}, "memory_stability": {"$ref": "#/$defs/nonnegative_number"}}},
+        "speed_weights": {"type": "object", "additionalProperties": false,
+          "required": ["generation", "prompt", "hot_latency", "ttft", "cold_load"],
+          "properties": {"generation": {"$ref": "#/$defs/nonnegative_number"}, "prompt": {"$ref": "#/$defs/nonnegative_number"}, "hot_latency": {"$ref": "#/$defs/nonnegative_number"}, "ttft": {"$ref": "#/$defs/nonnegative_number"}, "cold_load": {"$ref": "#/$defs/nonnegative_number"}}},
+        "workload_weights": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/positive_number"}},
+        "missing_metric_policy": {"$ref": "#/$defs/nonempty"}
+      }
+    },
+    "environment": {
+      "type": "object", "additionalProperties": false, "required": ["platform", "machine", "power"],
+      "properties": {"platform": {"$ref": "#/$defs/nonempty"}, "machine": {"$ref": "#/$defs/nonempty"}, "power": {"enum": ["ac_power", "battery", "unknown", "not_applicable"]}}
+    },
+    "official_eligible": {"type": "boolean"}
+  },
+  "$defs": {
+    "nonempty": {"type": "string", "minLength": 1},
+    "number": {"type": "number"},
+    "nonnegative_number": {"type": "number", "minimum": 0},
+    "positive_number": {"type": "number", "exclusiveMinimum": 0},
+    "positive_int": {"type": "integer", "minimum": 1},
+    "nonnegative_int": {"type": "integer", "minimum": 0},
+    "string_list": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/nonempty"}},
+    "optional_string_list": {"type": ["array", "null"], "items": {"$ref": "#/$defs/nonempty"}, "uniqueItems": true},
+    "model": {"type": "object", "additionalProperties": false, "required": ["name", "digest"],
+      "properties": {"name": {"$ref": "#/$defs/nonempty"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}},
+    "functional_effective": {"type": "object", "additionalProperties": false,
+      "required": ["models", "case_ids", "repetitions", "max_turns", "keep_alive", "pause_seconds"],
+      "properties": {"models": {"$ref": "#/$defs/string_list"}, "case_ids": {"$ref": "#/$defs/string_list"},
+        "repetitions": {"$ref": "#/$defs/positive_int"}, "max_turns": {"$ref": "#/$defs/positive_int"},
+        "keep_alive": {"$ref": "#/$defs/nonempty"}, "pause_seconds": {"$ref": "#/$defs/nonnegative_int"}}},
+    "performance_effective": {"type": "object", "additionalProperties": false,
+      "required": ["models", "workload_ids", "cold_runs", "hot_runs", "ttft_runs", "keep_alive", "pause_after_unload_seconds", "pause_between_models_seconds"],
+      "properties": {"models": {"$ref": "#/$defs/string_list"}, "workload_ids": {"$ref": "#/$defs/string_list"},
+        "cold_runs": {"$ref": "#/$defs/positive_int"}, "hot_runs": {"$ref": "#/$defs/positive_int"},
+        "ttft_runs": {"$ref": "#/$defs/nonnegative_int"}, "keep_alive": {"$ref": "#/$defs/nonempty"},
+        "pause_after_unload_seconds": {"$ref": "#/$defs/nonnegative_number"}, "pause_between_models_seconds": {"$ref": "#/$defs/nonnegative_number"}}},
+    "functional_overrides": {"type": "object", "additionalProperties": false,
+      "required": ["models", "case_ids", "repetitions", "allow_battery"],
+      "properties": {"models": {"$ref": "#/$defs/optional_string_list"}, "case_ids": {"$ref": "#/$defs/optional_string_list"},
+        "repetitions": {"type": ["integer", "null"], "minimum": 1}, "allow_battery": {"type": "boolean"}}},
+    "performance_overrides": {"type": "object", "additionalProperties": false,
+      "required": ["models", "workloads", "allow_battery"],
+      "properties": {"models": {"$ref": "#/$defs/optional_string_list"}, "workloads": {"$ref": "#/$defs/optional_string_list"},
+        "allow_battery": {"type": "boolean"}}},
+    "calendar_entry": {"type": "object", "additionalProperties": false,
+      "required": ["execution_key", "model", "target_id", "repetition", "measurement_type", "block", "position"],
+      "properties": {"execution_key": {"$ref": "#/$defs/nonempty"}, "model": {"$ref": "#/$defs/nonempty"},
+        "target_id": {"$ref": "#/$defs/nonempty"}, "repetition": {"$ref": "#/$defs/positive_int"},
+        "measurement_type": {"enum": ["functional", "cold", "hot", "ttft"]},
+        "block": {"$ref": "#/$defs/nonempty"}, "position": {"$ref": "#/$defs/positive_int"}}}
+  }
+}

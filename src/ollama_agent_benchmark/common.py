@@ -218,12 +218,12 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> dict[str, Any]:
     expected = {"tool_reliability", "quality_reasoning", "speed", "memory_stability"}
     if set(weights) != expected:
         raise ValueError(f"config.weights debe contener exactamente: {sorted(expected)}")
-    if abs(sum(float(v) for v in weights.values()) - 1.0) > 1e-12:
-        raise ValueError("Las ponderaciones deben sumar 1.0")
     if any(
         not isinstance(v, (int, float)) or isinstance(v, bool) or v < 0 for v in weights.values()
     ):
         raise ValueError("config.weights solo admite números no negativos")
+    if abs(sum(weights.values()) - 1.0) > 1e-12:
+        raise ValueError("Las ponderaciones deben sumar 1.0")
 
     ollama = config.get("ollama")
     if not isinstance(ollama, dict) or not isinstance(ollama.get("base_url"), str):
@@ -259,9 +259,13 @@ def load_config(path: pathlib.Path = CONFIG_PATH) -> dict[str, Any]:
             if (
                 not isinstance(section.get(key), int)
                 or isinstance(section.get(key), bool)
-                or section[key] < 1
+                or section[key] < (0 if key == "ttft_runs" else 1)
             ):
-                raise ValueError(f"El contador {key} debe ser un entero positivo")
+                raise ValueError(
+                    f"El contador {key} debe ser un entero no negativo"
+                    if key == "ttft_runs"
+                    else f"El contador {key} debe ser un entero positivo"
+                )
 
     speed = config.get("speed_weights")
     speed_expected = {"generation", "prompt", "hot_latency", "ttft", "cold_load"}

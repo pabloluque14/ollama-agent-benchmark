@@ -24,6 +24,12 @@ init → lock → validate → preflight → functional → performance → repo
 
 ### Runner funcional
 
+En el desarrollo de `0.3.0`, ambos runners escriben un `plan.json` v3 validado antes de consultar
+Ollama. Guarda los inputs bloqueados por hash, identidades, opciones, valores efectivos y el
+calendario de claves. La publicación es atómica y excluye sobrescrituras. `dry-run` no persiste
+ese plan ni registros. Los formatos v2 de registros e informes siguen activos hasta completar
+los tickets de evidencia y derivados; no deben interpretarse como el protocolo final 0.3.
+
 Conserva la conversación completa. Cuando el modelo solicita una herramienta:
 
 1. valida nombre y argumentos;

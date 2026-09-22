@@ -16,6 +16,12 @@ Edita `config/benchmark.json`:
 
 El orden se usa como punto inicial. El runner lo rota entre repeticiones.
 
+El plan del run registra el modo y los valores realmente elegidos después de aplicar configuración
+y CLI (`--repetitions`, `--models`, `--case-ids` o `--workloads`, según runner). Reanudar con valores
+distintos se rechaza antes de contactar con Ollama. En rendimiento, `ttft_runs: 0` significa que
+TTFT no se planificó: no crea claves TTFT ni debe contarse como medición fallida. `dry-run` solo
+muestra una previsualización y no crea un run reanudable.
+
 `order_control.seed` controla el barajado de casos. `speed_weights` y `workload_weights` deben sumar
 1.0. Tres cargas frías son el valor oficial predeterminado; reducirlas cambia el experimento.
 

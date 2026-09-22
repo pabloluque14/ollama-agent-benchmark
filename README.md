@@ -7,6 +7,12 @@ utilizarlos como agentes con herramientas.
 > no reciben acceso a la shell, a tus archivos ni a aplicaciones reales. Los runs de `0.1.0` no son
 > compatibles con esta versión.
 
+La evolución hacia `0.3.0` está en curso. Los runners ya materializan `runs/<run-id>/plan.json`
+con el modo, los valores efectivos, las identidades y el calendario antes del preflight y de
+medir. El archivo no se sobrescribe; una reanudación con valores distintos se rechaza. `dry-run`
+solo previsualiza y no crea evidencia. Los manifests, registros e informes aún conservan el
+formato `0.2.0`: este corte no constituye todavía un run oficial completo de `0.3.0`.
+
 ## Documentación del proyecto
 
 Si buscas una explicación especializada, puedes abrir directamente estos documentos:

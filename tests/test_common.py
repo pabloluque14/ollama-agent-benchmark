@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -55,6 +56,15 @@ class CommonTests(unittest.TestCase):
             path.write_text(__import__("json").dumps(document), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "order_control.seed"):
                 load_config(path)
+
+    def test_ttft_zero_is_an_explicit_plan_choice(self):
+        source = Path(__file__).parents[1] / "config" / "benchmark.example.json"
+        document = json.loads(source.read_text(encoding="utf-8"))
+        document["performance"]["ttft_runs"] = 0
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "benchmark.json"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(load_config(path)["performance"]["ttft_runs"], 0)
 
     def test_manifest_compatibility_reports_fields(self):
         existing = {"schema_version": 2, "models": ["a"], "generation": {"seed": 1}}

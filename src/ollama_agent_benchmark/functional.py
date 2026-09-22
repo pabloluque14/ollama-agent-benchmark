@@ -54,6 +54,7 @@ from .common import (
     validate_manifest_compatibility,
     write_json_atomic,
 )
+from .run_plan import create_run_plan, make_run_plan, validate_run_plan
 
 PROTOCOL_PATH = CONFIG_PATH
 CASES_PATH = ROOT / "datasets" / "benchmark_cases_v2.json"
@@ -1009,13 +1010,6 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {digest}  {name}")
         return 0
 
-    base = api_base(data["protocol"])
-    try:
-        ollama_state = verify_ollama_and_models(data["lock"], base)
-    except (OSError, urllib.error.URLError, json.JSONDecodeError, RuntimeError) as exc:
-        print(f"ERROR verificando Ollama: {exc}", file=sys.stderr)
-        return 1
-
     power = detect_power()
     acceptable_power = power["condition"] in {"ac_power", "not_applicable"}
     official_eligible = (
@@ -1030,18 +1024,87 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = ROOT / "runs" / run_id
     records_path = run_dir / "records.jsonl"
     manifest_path = run_dir / "run_manifest.json"
+    plan_path = run_dir / "plan.json"
     snapshots_path = run_dir / "system_snapshots.jsonl"
 
     if run_dir.exists() and not args.resume:
         print(f"ERROR: ya existe {run_dir}. Usa --resume o elige otro --run-id.", file=sys.stderr)
         return 4
-    if args.resume and not manifest_path.exists():
+    if args.resume and not plan_path.exists():
         print(
-            "ERROR: --resume exige un manifest existente; no se mezclará un run huérfano.",
+            "ERROR: --resume exige un plan existente; no se mezclará un run huérfano.",
             file=sys.stderr,
         )
         return 4
-    run_dir.mkdir(parents=True, exist_ok=True)
+
+    functional_cfg = data["protocol"]["functional"]
+    pause = (
+        functional_cfg["pause_between_models_seconds"]
+        if args.mode == "official-functional"
+        else functional_cfg["smoke_pause_seconds"]
+    )
+    random_seed = data["protocol"]["order_control"]["seed"]
+    calendar = []
+    for rep_index, sequence in enumerate(sequences):
+        cases = list(plan["cases"])
+        random.Random(random_seed + rep_index).shuffle(cases)
+        for position, model in enumerate(sequence, 1):
+            for case in cases:
+                calendar.append(
+                    {
+                        "execution_key": f"R{rep_index + 1}:{model}:{case['id']}",
+                        "model": model,
+                        "target_id": case["id"],
+                        "repetition": rep_index + 1,
+                        "measurement_type": "functional",
+                        "block": f"R{rep_index + 1}:{case['id']}",
+                        "position": position,
+                    }
+                )
+    try:
+        run_plan = make_run_plan(
+            run_id=run_id,
+            runner="functional",
+            mode=args.mode,
+            config=data["protocol"],
+            lock=data["lock"],
+            effective={
+                "models": plan["models"],
+                "case_ids": [case["id"] for case in plan["cases"]],
+                "repetitions": plan["repetitions"],
+                "max_turns": functional_cfg["max_turns"],
+                "keep_alive": functional_cfg["keep_alive"],
+                "pause_seconds": pause,
+            },
+            overrides={
+                "models": parse_csv_arg(args.models),
+                "case_ids": parse_csv_arg(args.case_ids),
+                "repetitions": args.repetitions,
+                "allow_battery": args.allow_battery,
+            },
+            calendar=calendar,
+            input_hashes=data["hashes"],
+            power_condition=power["condition"],
+            official_eligible=official_eligible,
+        )
+        if args.resume:
+            original = validate_run_plan(read_json(plan_path))
+            comparable = {key: value for key, value in run_plan.items() if key != "created_at_utc"}
+            previous = {key: value for key, value in original.items() if key != "created_at_utc"}
+            if comparable != previous:
+                raise ValueError("plan: modo, overrides o inputs incompatibles con la reanudación")
+        else:
+            create_run_plan(plan_path, run_plan)
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        print(f"ERROR materializando plan: {exc}", file=sys.stderr)
+        return 4
+
+    base = api_base(data["protocol"])
+    try:
+        ollama_state = verify_ollama_and_models(data["lock"], base)
+    except (OSError, urllib.error.URLError, json.JSONDecodeError, RuntimeError) as exc:
+        print(f"ERROR verificando Ollama: {exc}", file=sys.stderr)
+        return 1
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -1118,14 +1181,7 @@ def main(argv: list[str] | None = None) -> int:
         "presence_penalty": generation["presence_penalty"],
         "num_predict": generation["num_predict"],
     }
-    keep_alive_hot = str(data["protocol"].get("functional", {}).get("keep_alive", "5m"))
-    functional_cfg = data["protocol"].get("functional", {})
-    pause = (
-        int(functional_cfg.get("pause_between_models_seconds", 30))
-        if args.mode == "official-functional"
-        else int(functional_cfg.get("smoke_pause_seconds", 2))
-    )
-    random_seed = int(data["protocol"]["order_control"]["seed"])
+    keep_alive_hot = functional_cfg["keep_alive"]
     total = len(plan["models"]) * len(plan["cases"]) * plan["repetitions"]
     done_count = len(completed)
 
