@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import json
+import shutil
 import tempfile
 import unittest
 import urllib.error
@@ -28,6 +30,7 @@ from ollama_agent_benchmark.performance import (
     validate_workload_response,
 )
 from ollama_agent_benchmark.preflight import run_preflight
+from ollama_agent_benchmark.report_v3 import validate_report_document
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -297,6 +300,64 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
             self.assertEqual(document["kind"], "official")
             self.assertFalse(document["ranking_available"])
             self.assertEqual(document["ranking"], [])
+            for section, replacement in (
+                ("provenance", {}),
+                ("performance", {"summary": {"models": {fake.state.model: {}}}, "scores": {}}),
+                ("scores", {fake.state.model: {"complete": False}}),
+            ):
+                with self.subTest(section=section):
+                    invalid = copy.deepcopy(document)
+                    invalid[section] = replacement
+                    with self.assertRaises(ValueError):
+                        validate_report_document(invalid)
+            inconsistent_score = copy.deepcopy(document)
+            inconsistent_score["scores"][fake.state.model]["final_score"] = 5.0
+            with self.assertRaisesRegex(ValueError, "final_score"):
+                validate_report_document(inconsistent_score)
+            invalid_pairwise = copy.deepcopy(document)
+            invalid_pairwise["functional"]["pairwise_mcnemar"] = [{}]
+            with self.assertRaises(ValueError):
+                validate_report_document(invalid_pairwise)
+            invalid_interval = copy.deepcopy(document)
+            invalid_interval["functional"]["models"][fake.state.model]["tracks"][
+                "tool_reliability"
+            ]["wilson_95"].append(0.5)
+            with self.assertRaises(ValueError):
+                validate_report_document(invalid_interval)
+
+            no_ttft_dir = root / "performance-no-ttft"
+            no_ttft_dir.mkdir()
+            no_ttft_plan = json.loads(
+                (root / "runs" / performance_run / "plan.json").read_text()
+            )
+            no_ttft_plan["effective"]["ttft_runs"] = 0
+            no_ttft_plan["calendar"] = [
+                item for item in no_ttft_plan["calendar"] if item["measurement_type"] != "ttft"
+            ]
+            no_ttft_plan["measurement_protocol"]["metrics"].remove("ttft_seconds")
+            (no_ttft_dir / "plan.json").write_text(json.dumps(no_ttft_plan), encoding="utf-8")
+            shutil.copy2(
+                root / "runs" / performance_run / "performance_records.jsonl", no_ttft_dir
+            )
+            no_ttft_output = root / "report-no-ttft"
+            self.assertEqual(
+                report.main(
+                    [
+                        "--functional-run",
+                        str(root / "runs" / functional_run),
+                        "--performance-run",
+                        str(no_ttft_dir),
+                        "--output",
+                        str(no_ttft_output),
+                    ]
+                ),
+                0,
+            )
+            no_ttft_score = json.loads((no_ttft_output / "report.json").read_text())[
+                "performance"
+            ]["scores"][fake.state.model]
+            self.assertEqual(no_ttft_score["speed_score"], 85.0)
+            self.assertNotIn("ttft", no_ttft_score["speed_components"])
 
             performance_csv = root / "runs" / performance_run / "performance_results.csv"
             original_csv = performance_csv.read_bytes()
@@ -343,6 +404,32 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(performance_csv.read_bytes(), original_csv)
 
+            empty_functional = root / "empty-functional"
+            empty_performance = root / "empty-performance"
+            empty_functional.mkdir()
+            empty_performance.mkdir()
+            shutil.copy2(root / "runs" / functional_run / "plan.json", empty_functional)
+            shutil.copy2(root / "runs" / performance_run / "plan.json", empty_performance)
+            empty_output = root / "empty-report"
+            self.assertEqual(
+                report.main(
+                    [
+                        "--functional-run",
+                        str(empty_functional),
+                        "--performance-run",
+                        str(empty_performance),
+                        "--output",
+                        str(empty_output),
+                    ]
+                ),
+                0,
+            )
+            empty_document = json.loads((empty_output / "report.json").read_text())
+            self.assertEqual(empty_document["kind"], "official")
+            self.assertFalse(empty_document["ranking_available"])
+            self.assertEqual(empty_document["ranking"], [])
+            self.assertIsNone(empty_document["scores"][fake.state.model]["final_score"])
+
             integrity = root / "runs" / functional_run / "integrity.jsonl"
             record_integrity_failure(
                 integrity,
@@ -368,6 +455,10 @@ class FakeOllamaIntegrationTests(unittest.TestCase):
             diagnostic_document = json.loads((diagnostic / "report.json").read_text())
             self.assertEqual(diagnostic_document["kind"], "diagnostic")
             self.assertNotIn("scores", diagnostic_document)
+            invalid_diagnostic = copy.deepcopy(diagnostic_document)
+            invalid_diagnostic["integrity_events"] = [{}]
+            with self.assertRaises(ValueError):
+                validate_report_document(invalid_diagnostic)
             self.assertFalse((diagnostic / "scores.csv").exists())
             self.assertTrue((output / "scores.csv").exists())
             self.assertEqual(

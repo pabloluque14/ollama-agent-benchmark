@@ -23,6 +23,10 @@ class ScheduleTests(unittest.TestCase):
                 self.assertEqual(len(calendar), model_count * repetitions * 2)
                 self.assertEqual(len({item["execution_key"] for item in calendar}), len(calendar))
                 for case_id in ("T001", "T002"):
+                    self.assertEqual(
+                        {item["block"] for item in calendar if item["target_id"] == case_id},
+                        {case_id},
+                    )
                     for model in models:
                         counts = Counter(
                             item["position"]
@@ -42,6 +46,14 @@ class ScheduleTests(unittest.TestCase):
         self.assertFalse(any(item["measurement_type"] == "ttft" for item in calendar))
         for workload in ("short", "long"):
             for state in ("cold", "hot"):
+                self.assertEqual(
+                    {
+                        item["block"]
+                        for item in calendar
+                        if item["target_id"] == workload and item["measurement_type"] == state
+                    },
+                    {f"{workload}:{state}"},
+                )
                 for model in models:
                     counts = Counter(
                         item["position"]

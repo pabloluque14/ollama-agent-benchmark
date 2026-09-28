@@ -16,10 +16,10 @@ from .common import (
     load_config,
     post_json,
     public_base_url,
+    sanitize_text,
     sha256_text,
     write_json_atomic,
 )
-from .failures import sanitize_text
 
 
 def architecture_metadata(model_info: dict[str, Any]) -> dict[str, Any]:

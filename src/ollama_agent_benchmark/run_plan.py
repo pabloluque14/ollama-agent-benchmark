@@ -96,6 +96,8 @@ def _validate(value: Any, rule: dict[str, Any], path: str, schema: dict[str, Any
     elif isinstance(value, list):
         if len(value) < rule.get("minItems", 0):
             raise ValueError(f"{path}: lista vacía o incompleta")
+        if "maxItems" in rule and len(value) > rule["maxItems"]:
+            raise ValueError(f"{path}: demasiados elementos")
         if rule.get("uniqueItems") and len({json.dumps(x, sort_keys=True) for x in value}) != len(
             value
         ):
@@ -116,6 +118,8 @@ def _validate(value: Any, rule: dict[str, Any], path: str, schema: dict[str, Any
 
 def validate_run_plan(plan: Any) -> dict[str, Any]:
     """Valida estructura y coherencia sin modificar ni completar el plan."""
+    from .input_contracts import validate_dataset
+
     schema = _schema("run-plan-v3")
     _validate(plan, schema, "plan", schema)
     if plan["runner"] == "functional":
@@ -154,6 +158,12 @@ def validate_run_plan(plan: Any) -> dict[str, Any]:
         "config/models.lock.json",
     }:
         raise ValueError("plan.input_hashes: faltan o sobran hashes de planificación")
+    snapshot_kinds = {
+        "datasets/benchmark_cases_v2.json": "cases",
+        "datasets/fixtures_v2.json": "fixtures",
+        "datasets/tools_v2.json": "tools",
+        "datasets/performance_workloads_v2.json": "workloads",
+    }
     snapshots = {}
     for path, encoded in plan["input_snapshots"].items():
         try:
@@ -165,6 +175,7 @@ def validate_run_plan(plan: Any) -> dict[str, Any]:
             raise ValueError(f"plan.input_snapshots.{path}: hash incompatible")
         if not isinstance(document, dict) or document.get("schema_version") != 2:
             raise ValueError(f"plan.input_snapshots.{path}: versión de input incompatible")
+        validate_dataset(snapshot_kinds[path], document)
         snapshots[path] = document
     if plan["runner"] == "functional":
         cases = snapshots["datasets/benchmark_cases_v2.json"].get("cases")
@@ -313,7 +324,7 @@ def functional_calendar(
                         "target_id": case_id,
                         "repetition": rep,
                         "measurement_type": "functional",
-                        "block": f"R{rep}:{case_id}",
+                        "block": case_id,
                         "position": position,
                     }
                 )
@@ -347,7 +358,7 @@ def performance_calendar(
                             "target_id": workload,
                             "repetition": index,
                             "measurement_type": state,
-                            "block": f"{workload}:{state}:{index}",
+                            "block": f"{workload}:{state}",
                             "position": position,
                         }
                     )

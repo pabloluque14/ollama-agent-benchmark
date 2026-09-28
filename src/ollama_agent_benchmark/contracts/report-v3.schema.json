@@ -2,31 +2,791 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:oab:report:3",
   "oneOf": [
-    {"$ref": "#/$defs/official"},
-    {"$ref": "#/$defs/diagnostic"}
+    {
+      "$ref": "#/$defs/official"
+    },
+    {
+      "$ref": "#/$defs/diagnostic"
+    }
   ],
   "$defs": {
-    "official": {
-      "type": "object", "additionalProperties": false,
-      "required": ["schema_version", "benchmark_version", "kind", "eligible", "ranking_available", "created_at_utc", "provenance", "warnings", "functional", "performance", "scores", "ranking"],
+    "nullable_number": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "nonnegative_int": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "metric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "mean",
+        "median",
+        "stdev",
+        "min",
+        "max"
+      ],
       "properties": {
-        "schema_version": {"const": 3}, "benchmark_version": {"const": "0.3.0"},
-        "kind": {"const": "official"}, "eligible": {"const": true},
-        "ranking_available": {"type": "boolean"}, "created_at_utc": {"type": "string", "minLength": 1},
-        "provenance": {"type": "object"}, "warnings": {"type": "array", "items": {"type": "string"}},
-        "functional": {"type": "object"}, "performance": {"type": "object"},
-        "scores": {"type": "object"}, "ranking": {"type": "array", "items": {"type": "string"}}
+        "count": {
+          "$ref": "#/$defs/nonnegative_int"
+        },
+        "mean": {
+          "$ref": "#/$defs/nullable_number"
+        },
+        "median": {
+          "$ref": "#/$defs/nullable_number"
+        },
+        "stdev": {
+          "$ref": "#/$defs/nullable_number"
+        },
+        "min": {
+          "$ref": "#/$defs/nullable_number"
+        },
+        "max": {
+          "$ref": "#/$defs/nullable_number"
+        }
+      }
+    },
+    "cell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "expected",
+        "observed",
+        "valid"
+      ],
+      "properties": {
+        "expected": {
+          "$ref": "#/$defs/nonnegative_int"
+        },
+        "observed": {
+          "$ref": "#/$defs/nonnegative_int"
+        },
+        "valid": {
+          "type": "boolean"
+        }
+      }
+    },
+    "metric_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hot_prompt_tps",
+        "hot_generation_tps",
+        "hot_total_seconds",
+        "cold_load_seconds",
+        "size_vram_bytes",
+        "swap_delta_bytes"
+      ],
+      "properties": {
+        "hot_prompt_tps": {
+          "$ref": "#/$defs/metric"
+        },
+        "hot_generation_tps": {
+          "$ref": "#/$defs/metric"
+        },
+        "hot_total_seconds": {
+          "$ref": "#/$defs/metric"
+        },
+        "cold_load_seconds": {
+          "$ref": "#/$defs/metric"
+        },
+        "size_vram_bytes": {
+          "$ref": "#/$defs/metric"
+        },
+        "swap_delta_bytes": {
+          "$ref": "#/$defs/metric"
+        },
+        "ttft_seconds": {
+          "$ref": "#/$defs/metric"
+        }
+      }
+    },
+    "cells": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hot_prompt_tps",
+        "hot_generation_tps",
+        "hot_total_seconds",
+        "cold_load_seconds",
+        "size_vram_bytes",
+        "swap_delta_bytes"
+      ],
+      "properties": {
+        "hot_prompt_tps": {
+          "$ref": "#/$defs/cell"
+        },
+        "hot_generation_tps": {
+          "$ref": "#/$defs/cell"
+        },
+        "hot_total_seconds": {
+          "$ref": "#/$defs/cell"
+        },
+        "cold_load_seconds": {
+          "$ref": "#/$defs/cell"
+        },
+        "size_vram_bytes": {
+          "$ref": "#/$defs/cell"
+        },
+        "swap_delta_bytes": {
+          "$ref": "#/$defs/cell"
+        },
+        "ttft_seconds": {
+          "$ref": "#/$defs/cell"
+        }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "records",
+        "valid_records",
+        "cells",
+        "hot_prompt_tps",
+        "hot_generation_tps",
+        "hot_total_seconds",
+        "cold_load_seconds",
+        "size_vram_bytes",
+        "swap_delta_bytes"
+      ],
+      "properties": {
+        "records": {
+          "$ref": "#/$defs/nonnegative_int"
+        },
+        "valid_records": {
+          "$ref": "#/$defs/nonnegative_int"
+        },
+        "cells": {
+          "$ref": "#/$defs/cells"
+        },
+        "hot_prompt_tps": {
+          "$ref": "#/$defs/metric"
+        },
+        "hot_generation_tps": {
+          "$ref": "#/$defs/metric"
+        },
+        "hot_total_seconds": {
+          "$ref": "#/$defs/metric"
+        },
+        "cold_load_seconds": {
+          "$ref": "#/$defs/metric"
+        },
+        "size_vram_bytes": {
+          "$ref": "#/$defs/metric"
+        },
+        "swap_delta_bytes": {
+          "$ref": "#/$defs/metric"
+        },
+        "ttft_seconds": {
+          "$ref": "#/$defs/metric"
+        }
+      }
+    },
+    "performance_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "records",
+        "runner_errors",
+        "invalid_records",
+        "workloads",
+        "aggregate"
+      ],
+      "properties": {
+        "records": {
+          "$ref": "#/$defs/nonnegative_int"
+        },
+        "runner_errors": {
+          "$ref": "#/$defs/nonnegative_int"
+        },
+        "invalid_records": {
+          "$ref": "#/$defs/nonnegative_int"
+        },
+        "workloads": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/workload"
+          }
+        },
+        "aggregate": {
+          "$ref": "#/$defs/metric_set"
+        }
+      }
+    },
+    "speed_components": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generation_tps",
+        "prompt_tps",
+        "total_latency",
+        "cold_load"
+      ],
+      "properties": {
+        "generation_tps": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "prompt_tps": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "total_latency": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "cold_load": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "ttft": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "performance_score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "speed_components",
+        "speed_score",
+        "memory_components",
+        "memory_stability_score"
+      ],
+      "properties": {
+        "raw": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "generation_tps_median",
+            "prompt_tps_median",
+            "hot_total_seconds_median",
+            "cold_load_seconds_median",
+            "size_vram_bytes_median",
+            "swap_delta_bytes_median",
+            "runner_errors",
+            "workloads"
+          ],
+          "properties": {
+            "generation_tps_median": {"$ref": "#/$defs/nullable_number"},
+            "prompt_tps_median": {"$ref": "#/$defs/nullable_number"},
+            "hot_total_seconds_median": {"$ref": "#/$defs/nullable_number"},
+            "cold_load_seconds_median": {"$ref": "#/$defs/nullable_number"},
+            "ttft_seconds_median": {"$ref": "#/$defs/nullable_number"},
+            "size_vram_bytes_median": {"$ref": "#/$defs/nullable_number"},
+            "swap_delta_bytes_median": {"$ref": "#/$defs/nullable_number"},
+            "runner_errors": {"$ref": "#/$defs/nonnegative_int"},
+            "workloads": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/workload"}}
+          }
+        },
+        "speed_components": {
+          "$ref": "#/$defs/speed_components"
+        },
+        "speed_score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "memory_components": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "relative_memory",
+            "swap",
+            "error_free"
+          ],
+          "properties": {
+            "relative_memory": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "swap": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "error_free": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        },
+        "memory_stability_score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      }
+    },
+    "track": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complete",
+        "executions",
+        "passed",
+        "success_rate",
+        "majority_cases_passed",
+        "majority_success_rate",
+        "wilson_95",
+        "unique_cases",
+        "cases_passed_all_repetitions",
+        "case_consistency_rate"
+      ],
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "executions": {
+          "$ref": "#/$defs/nonnegative_int"
+        },
+        "passed": {
+          "$ref": "#/$defs/nonnegative_int"
+        },
+        "success_rate": {
+          "$ref": "#/$defs/nullable_number"
+        },
+        "majority_cases_passed": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "majority_success_rate": {
+          "$ref": "#/$defs/nullable_number"
+        },
+        "wilson_95": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/nullable_number"
+          }
+        },
+        "unique_cases": {
+          "$ref": "#/$defs/nonnegative_int"
+        },
+        "cases_passed_all_repetitions": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "case_consistency_rate": {
+          "$ref": "#/$defs/nullable_number"
+        }
+      }
+    },
+    "functional_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runner_errors",
+        "tracks",
+        "executions"
+      ],
+      "properties": {
+        "runner_errors": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tracks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tool_reliability",
+            "quality_reasoning"
+          ],
+          "properties": {
+            "tool_reliability": {
+              "$ref": "#/$defs/track"
+            },
+            "quality_reasoning": {
+              "$ref": "#/$defs/track"
+            }
+          }
+        },
+        "executions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "pairwise_comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model_a", "model_b", "a_pass_b_fail", "a_fail_b_pass", "mcnemar_exact_p", "case_count"],
+      "properties": {
+        "model_a": {"type": "string", "minLength": 1},
+        "model_b": {"type": "string", "minLength": 1},
+        "a_pass_b_fail": {"$ref": "#/$defs/nonnegative_int"},
+        "a_fail_b_pass": {"$ref": "#/$defs/nonnegative_int"},
+        "mcnemar_exact_p": {"$ref": "#/$defs/nullable_number"},
+        "case_count": {"$ref": "#/$defs/nonnegative_int"}
+      }
+    },
+    "integrity_event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "event_id", "timestamp_utc", "category", "phase", "code", "description", "component", "operation", "execution_key", "persistence_compromised"],
+      "properties": {
+        "schema_version": {"const": 3},
+        "event_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "timestamp_utc": {"type": "string", "minLength": 1},
+        "category": {"const": "benchmark_integrity_failure"},
+        "phase": {"enum": ["execution", "persistence", "resume", "aggregation", "report"]},
+        "code": {"type": "string", "pattern": "^[a-z][a-z0-9_]+$"},
+        "description": {"type": "string", "minLength": 1},
+        "component": {"enum": ["functional", "performance", "ttft", "storage", "report"]},
+        "operation": {"type": "string", "minLength": 1},
+        "execution_key": {"type": ["string", "null"]},
+        "persistence_compromised": {"type": "boolean"}
+      }
+    },
+    "functional": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "models",
+        "pairwise_mcnemar",
+        "records"
+      ],
+      "properties": {
+        "models": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/functional_model"
+          }
+        },
+        "pairwise_mcnemar": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pairwise_comparison"
+          }
+        },
+        "records": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "functional_run_id",
+        "performance_run_id",
+        "evidence_hashes",
+        "plan_fingerprints",
+        "algorithms"
+      ],
+      "properties": {
+        "functional_run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "performance_run_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence_hashes": {
+          "type": "object",
+          "minProperties": 5,
+          "additionalProperties": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "plan_fingerprints": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "functional",
+            "performance"
+          ],
+          "properties": {
+            "functional": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "performance": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        "algorithms": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "functional",
+            "performance"
+          ],
+          "properties": {
+            "functional": {
+              "type": "object",
+              "minProperties": 7,
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "performance": {
+              "type": "object",
+              "minProperties": 7,
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
+    "official_score": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "components",
+        "final_score",
+        "complete"
+      ],
+      "properties": {
+        "components": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "tool_reliability",
+            "quality_reasoning",
+            "speed",
+            "memory_stability"
+          ],
+          "properties": {
+            "tool_reliability": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "quality_reasoning": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "speed": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "memory_stability": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          }
+        },
+        "final_score": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      }
+    },
+    "official": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "benchmark_version",
+        "kind",
+        "eligible",
+        "ranking_available",
+        "created_at_utc",
+        "provenance",
+        "warnings",
+        "functional",
+        "performance",
+        "scores",
+        "ranking"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 3
+        },
+        "benchmark_version": {
+          "const": "0.3.0"
+        },
+        "ranking_available": {
+          "type": "boolean"
+        },
+        "created_at_utc": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "kind": {
+          "const": "official"
+        },
+        "eligible": {
+          "const": true
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "functional": {
+          "$ref": "#/$defs/functional"
+        },
+        "performance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "summary",
+            "scores"
+          ],
+          "properties": {
+            "summary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "models",
+                "workload_weights"
+              ],
+              "properties": {
+                "models": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": {
+                    "$ref": "#/$defs/performance_model"
+                  }
+                },
+                "workload_weights": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                }
+              }
+            },
+            "scores": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": {
+                "$ref": "#/$defs/performance_score"
+              }
+            }
+          }
+        },
+        "scores": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/official_score"
+          }
+        },
+        "ranking": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       }
     },
     "diagnostic": {
-      "type": "object", "additionalProperties": false,
-      "required": ["schema_version", "benchmark_version", "kind", "eligible", "ranking_available", "created_at_utc", "provenance", "reason", "integrity_events"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "benchmark_version",
+        "kind",
+        "eligible",
+        "ranking_available",
+        "created_at_utc",
+        "provenance",
+        "reason",
+        "integrity_events"
+      ],
       "properties": {
-        "schema_version": {"const": 3}, "benchmark_version": {"const": "0.3.0"},
-        "kind": {"const": "diagnostic"}, "eligible": {"const": false},
-        "ranking_available": {"const": false}, "created_at_utc": {"type": "string", "minLength": 1},
-        "provenance": {"type": "object"}, "reason": {"type": "string", "minLength": 1},
-        "integrity_events": {"type": "array", "items": {"type": "object"}}
+        "schema_version": {
+          "const": 3
+        },
+        "benchmark_version": {
+          "const": "0.3.0"
+        },
+        "ranking_available": {
+          "const": false
+        },
+        "created_at_utc": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        },
+        "kind": {
+          "const": "diagnostic"
+        },
+        "eligible": {
+          "const": false
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "integrity_events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/integrity_event"
+          }
+        }
       }
     }
   }

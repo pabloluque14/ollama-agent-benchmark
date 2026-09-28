@@ -97,3 +97,25 @@ def record_integrity_failure(
             "no se pudo persistir el evento de integridad: " + sanitize_text(write_exc)
         ) from None
     return event
+
+
+def raise_on_integrity_failure(
+    exc: Exception,
+    path: pathlib.Path,
+    *,
+    component: str,
+    operation: str,
+    execution_key: str,
+) -> None:
+    """Clasifica y conserva un defecto del benchmark antes de abortar la clave."""
+    if classify_failure(exc) != "benchmark_integrity_failure":
+        return
+    record_integrity_failure(
+        path,
+        phase="execution",
+        component=component,
+        operation=operation,
+        exc=exc,
+        execution_key=execution_key,
+    )
+    raise BenchmarkIntegrityFailure(f"fallo de integridad durante {operation}") from None

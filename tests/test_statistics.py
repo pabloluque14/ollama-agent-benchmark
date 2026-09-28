@@ -111,6 +111,40 @@ class StatisticsTests(unittest.TestCase):
         self.assertIsNone(score["memory_components"]["swap"])
         self.assertIsNone(score["memory_stability_score"])
 
+    def test_unplanned_ttft_does_not_make_speed_unavailable_or_renormalize(self):
+        summary = {
+            "models": {
+                "m": {
+                    "runner_errors": 0,
+                    "records": 1,
+                    "workloads": {},
+                    "aggregate": {
+                        "hot_generation_tps": {"median": 10},
+                        "hot_prompt_tps": {"median": 10},
+                        "hot_total_seconds": {"median": 1},
+                        "cold_load_seconds": {"median": 1},
+                        "size_vram_bytes": {"median": 100},
+                        "swap_delta_bytes": {"median": 0},
+                    },
+                }
+            }
+        }
+        score = performance_scores(
+            summary,
+            ["m"],
+            {
+                "generation": 0.35,
+                "prompt": 0.20,
+                "hot_latency": 0.15,
+                "ttft": 0.15,
+                "cold_load": 0.15,
+            },
+            ttft_planned=False,
+        )["m"]
+        self.assertEqual(score["speed_score"], 85.0)
+        self.assertNotIn("ttft", score["speed_components"])
+        self.assertNotIn("ttft_seconds_median", score["raw"])
+
     def test_performance_summary_groups_before_weighting(self):
         records = []
         ttft_rows = []

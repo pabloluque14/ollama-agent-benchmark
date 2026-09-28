@@ -33,12 +33,37 @@ class RunPlanTests(unittest.TestCase):
             "title": "Ejemplo",
             "track": "tool_reliability",
             "category": "single",
+            "messages": [{"role": "user", "content": "Ejemplo"}],
+            "allowed_tools": ["simulated_terminal"],
+            "fixture_plan": [],
             "expected": {"mode": "text_contains"},
         }
-        snapshot = json.dumps({"schema_version": 2, "cases": [self.case]}).encode()
+        snapshot = json.dumps(
+            {
+                "schema_version": 2,
+                "suite_id": "plan-test",
+                "description": "",
+                "counts": {"tool_reliability": 1, "quality_reasoning": 0, "total": 1},
+                "cases": [self.case],
+            }
+        ).encode()
         snapshot_path = "datasets/benchmark_cases_v2.json"
         fixtures = b'{"schema_version":2,"virtual_docs":{},"virtual_files":{}}'
-        tools = b'{"schema_version":2,"tools":[]}'
+        tools = json.dumps(
+            {
+                "schema_version": 2,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "simulated_terminal",
+                            "description": "",
+                            "parameters": {},
+                        },
+                    }
+                ],
+            }
+        ).encode()
         self.plan = {
             "schema_version": 3,
             "benchmark_version": "0.3.0",
@@ -91,7 +116,7 @@ class RunPlanTests(unittest.TestCase):
                     "target_id": "T001",
                     "repetition": 1,
                     "measurement_type": "functional",
-                    "block": "R1:T001",
+                    "block": "T001",
                     "position": 1,
                 }
             ],
@@ -209,10 +234,23 @@ class RunPlanTests(unittest.TestCase):
     def test_plan_rejects_selected_case_missing_from_its_snapshot(self) -> None:
         plan = copy.deepcopy(self.plan)
         path = "datasets/benchmark_cases_v2.json"
-        payload = b'{"schema_version":2,"cases":[{"id":"T002"}]}'
+        document = json.loads(base64.b64decode(plan["input_snapshots"][path]))
+        document["cases"][0]["id"] = "T002"
+        payload = json.dumps(document).encode()
         plan["input_snapshots"][path] = base64.b64encode(payload).decode("ascii")
         plan["input_hashes"][path] = hashlib.sha256(payload).hexdigest()
         with self.assertRaisesRegex(ValueError, "input_snapshots"):
+            validate_run_plan(plan)
+
+    def test_plan_rejects_snapshot_missing_required_case_content_even_with_matching_hash(self) -> None:
+        plan = copy.deepcopy(self.plan)
+        path = "datasets/benchmark_cases_v2.json"
+        document = json.loads(base64.b64decode(plan["input_snapshots"][path]))
+        del document["cases"][0]["messages"]
+        payload = json.dumps(document).encode()
+        plan["input_snapshots"][path] = base64.b64encode(payload).decode("ascii")
+        plan["input_hashes"][path] = hashlib.sha256(payload).hexdigest()
+        with self.assertRaisesRegex(ValueError, "messages"):
             validate_run_plan(plan)
 
     def test_plan_rejects_duplicate_json_keys_in_snapshot(self) -> None:
@@ -236,7 +274,9 @@ class RunPlanTests(unittest.TestCase):
             "power_condition": "ac_power",
             "model": "fake:latest",
             "repetition": 1,
-            "case": self.case,
+            "case": {
+                key: self.case[key] for key in ("id", "title", "track", "category", "expected")
+            },
             "started_at_utc": "2026-09-22T12:00:00+00:00",
             "completed_at_utc": "2026-09-22T12:00:01+00:00",
             "wall_duration_seconds": 1.0,

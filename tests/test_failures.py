@@ -8,15 +8,38 @@ from unittest import mock
 
 from ollama_agent_benchmark.common import iter_jsonl, run_command, system_snapshot
 from ollama_agent_benchmark.failures import (
+    BenchmarkIntegrityFailure,
     IntegrityJournalWriteError,
     append_integrity_event,
     classify_failure,
+    raise_on_integrity_failure,
     record_integrity_failure,
     sanitize_text,
 )
 
 
 class FailurePolicyTests(unittest.TestCase):
+    def test_execution_failure_is_not_journaled_but_integrity_failure_is(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "integrity.jsonl"
+            raise_on_integrity_failure(
+                TimeoutError("modelo lento"),
+                path,
+                component="functional",
+                operation="run_case",
+                execution_key="key-1",
+            )
+            self.assertFalse(path.exists())
+            with self.assertRaises(BenchmarkIntegrityFailure):
+                raise_on_integrity_failure(
+                    RuntimeError("defecto del harness"),
+                    path,
+                    component="functional",
+                    operation="run_case",
+                    execution_key="key-1",
+                )
+            self.assertEqual(len(list(iter_jsonl(path))), 1)
+
     def test_classification_is_conservative_and_network_failures_are_terminal(self) -> None:
         self.assertEqual(classify_failure(TimeoutError()), "execution_failure")
         self.assertEqual(classify_failure(urllib.error.URLError("offline")), "execution_failure")

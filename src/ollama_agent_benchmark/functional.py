@@ -48,6 +48,7 @@ from .common import (
     post_json,
     public_base_url,
     read_json,
+    sanitize_text,
     sha256_file,
     system_snapshot,
     unload_model,
@@ -57,9 +58,8 @@ from .common import (
 )
 from .failures import (
     BenchmarkIntegrityFailure,
-    classify_failure,
+    raise_on_integrity_failure,
     record_integrity_failure,
-    sanitize_text,
 )
 from .input_contracts import validate_dataset
 from .primary_records import append_primary_record
@@ -1333,18 +1333,13 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         error = None
                     except Exception as exc:
-                        if classify_failure(exc) == "benchmark_integrity_failure":
-                            record_integrity_failure(
-                                integrity_path,
-                                phase="execution",
-                                component="functional",
-                                operation="run_case",
-                                exc=exc,
-                                execution_key=key,
-                            )
-                            raise BenchmarkIntegrityFailure(
-                                "fallo de integridad durante la ejecución funcional"
-                            ) from None
+                        raise_on_integrity_failure(
+                            exc,
+                            integrity_path,
+                            component="functional",
+                            operation="run_case",
+                            execution_key=key,
+                        )
                         result = {
                             "turns": [],
                             "tool_events": [],

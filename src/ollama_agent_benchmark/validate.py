@@ -6,8 +6,7 @@ import sys
 from collections import Counter
 from typing import Any
 
-from .common import ROOT, load_config
-from .failures import sanitize_text
+from .common import ROOT, load_config, sanitize_text
 from .functional import VirtualTools, resolve_expected
 from .input_contracts import validate_dataset
 

@@ -102,7 +102,8 @@ Los workloads pueden exigir tokens mínimos, contenido, regex o estructura. Una 
 si están presentes y son válidas todas sus muestras planificadas. Si una falla o falta, toda la
 celda es `N/D`; no se calcula con el subconjunto restante. `None` nunca se transforma en swap cero,
 memoria cero, TTFT instantáneo ni score perfecto. `ttft_runs = 0` significa que TTFT no fue
-planificado y, por tanto, no crea una celda `N/D`.
+planificado y, por tanto, no crea una celda `N/D`. En ese caso, el score de velocidad suma solo
+los componentes planificados con sus pesos originales: no inventa TTFT ni redistribuye su 15 %.
 
 Los valores de velocidad/memoria son relativos al mejor del mismo conjunto de modelos. Las métricas
 brutas por workload permanecen en JSON/CSV y deben acompañar cualquier comparación.

@@ -118,14 +118,14 @@ def _provenance(
         functional_dir / "records.jsonl",
         performance_dir / "plan.json",
         performance_dir / "performance_records.jsonl",
+        performance_dir / "ttft_records.jsonl",
     ]
-    ttft = performance_dir / "ttft_records.jsonl"
-    if ttft.exists():
-        paths.append(ttft)
     return {
         "functional_run_id": functional["plan"]["run_id"],
         "performance_run_id": performance["plan"]["run_id"],
-        "evidence_hashes": {str(path): sha256_file(path) for path in paths},
+        "evidence_hashes": {
+            str(path): sha256_file(path) if path.exists() else None for path in paths
+        },
         "plan_fingerprints": {
             "functional": config_fingerprint(functional["plan"]),
             "performance": config_fingerprint(performance["plan"]),
@@ -141,10 +141,26 @@ def validate_report_document(document: dict[str, Any]) -> dict[str, Any]:
     schema = _schema("report-v3")
     _validate(document, schema, "informe", schema)
     if document["kind"] == "official":
+        scores = document["scores"]
+        if not (
+            set(scores)
+            == set(document["functional"]["models"])
+            == set(document["performance"]["summary"]["models"])
+            == set(document["performance"]["scores"])
+        ):
+            raise ValueError("informe.scores: modelos incoherentes")
+        for model, score in scores.items():
+            complete = all(value is not None for value in score["components"].values())
+            if score["complete"] != complete:
+                raise ValueError(f"informe.scores.{model}.complete: componentes incoherentes")
+            if (score["final_score"] is not None) != complete:
+                raise ValueError(f"informe.scores.{model}.final_score: disponibilidad incoherente")
         available = all(item["complete"] for item in document["scores"].values())
         if document["ranking_available"] != available:
             raise ValueError("informe.ranking_available: incoherente con componentes")
-        if bool(document["ranking"]) != available:
+        if (available and set(document["ranking"]) != set(scores)) or (
+            not available and document["ranking"]
+        ):
             raise ValueError("informe.ranking: disponibilidad incoherente")
     return document
 
@@ -224,7 +240,10 @@ def generate_report_v3(
 
     models = [item["name"] for item in functional_plan["models"]]
     perf = performance_scores(
-        performance_summary, models, functional_plan["scoring_protocol"]["speed_weights"]
+        performance_summary,
+        models,
+        functional_plan["scoring_protocol"]["speed_weights"],
+        ttft_planned=bool(performance_plan["effective"]["ttft_runs"]),
     )
     weights = functional_plan["scoring_protocol"]["weights"]
     scores: dict[str, Any] = {}

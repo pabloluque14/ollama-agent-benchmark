@@ -48,7 +48,7 @@ Cada combinación modelo/workload ejecuta:
 
 En el plan v3, cada combinación de workload y tipo (`cold`, `hot`, TTFT) equilibra por separado las
 posiciones de modelos entre sus muestras. Si `ttft_runs = 0`, TTFT no está planificado y no cuenta
-como medición ausente. Las respuestas no streaming proporcionan las métricas de Ollama. Cada salida debe cumplir reglas
+como medición ausente ni componente `N/D`; su peso no se redistribuye. Las respuestas no streaming proporcionan las métricas de Ollama. Cada salida debe cumplir reglas
 deterministas del workload; una incompleta se conserva como inválida y no obtiene ventaja. Se resume
 primero por modelo/workload/estado/métrica y después se agregan workloads con pesos explícitos. Una
 celda solo tiene valor oficial cuando contiene todas las muestras planificadas y todas son válidas;

@@ -16,10 +16,10 @@ from .common import (
     SCHEMA_VERSION,
     iter_jsonl,
     read_json,
+    sanitize_text,
     utc_now,
     write_json_atomic,
 )
-from .failures import sanitize_text
 
 
 def wilson(
@@ -213,13 +213,17 @@ def median_field(summary: dict[str, Any], model: str, field: str) -> float | Non
 
 
 def performance_scores(
-    summary: dict[str, Any], models: list[str], speed_weights: dict[str, float]
+    summary: dict[str, Any],
+    models: list[str],
+    speed_weights: dict[str, float],
+    *,
+    ttft_planned: bool = True,
 ) -> dict[str, Any]:
     gen = {m: median_field(summary, m, "hot_generation_tps") for m in models}
     prompt = {m: median_field(summary, m, "hot_prompt_tps") for m in models}
     total = {m: median_field(summary, m, "hot_total_seconds") for m in models}
     load = {m: median_field(summary, m, "cold_load_seconds") for m in models}
-    ttft = {m: median_field(summary, m, "ttft_seconds") for m in models}
+    ttft = {m: median_field(summary, m, "ttft_seconds") for m in models} if ttft_planned else {}
     memory = {m: median_field(summary, m, "size_vram_bytes") for m in models}
     swap = {m: median_field(summary, m, "swap_delta_bytes") for m in models}
     errors = {m: int(summary["models"].get(m, {}).get("runner_errors", 0)) for m in models}
@@ -238,15 +242,17 @@ def performance_scores(
             "prompt_tps": ratio_high(prompt[model], best_prompt),
             "total_latency": ratio_low(total[model], best_total),
             "cold_load": ratio_low(load[model], best_load),
-            "ttft": ratio_low(ttft[model], best_ttft),
         }
+        if ttft_planned:
+            speed_components["ttft"] = ratio_low(ttft[model], best_ttft)
         weighted_components = {
             "generation": speed_components["generation_tps"],
             "prompt": speed_components["prompt_tps"],
             "hot_latency": speed_components["total_latency"],
-            "ttft": speed_components["ttft"],
             "cold_load": speed_components["cold_load"],
         }
+        if ttft_planned:
+            weighted_components["ttft"] = speed_components["ttft"]
         if all(value is not None for value in weighted_components.values()):
             speed_score = sum(
                 speed_weights[name] * value
@@ -270,18 +276,20 @@ def performance_scores(
             and error_free is not None
             else None
         )
+        raw = {
+            "generation_tps_median": gen[model],
+            "prompt_tps_median": prompt[model],
+            "hot_total_seconds_median": total[model],
+            "cold_load_seconds_median": load[model],
+            "size_vram_bytes_median": memory[model],
+            "swap_delta_bytes_median": swap[model],
+            "runner_errors": errors[model],
+            "workloads": summary["models"].get(model, {}).get("workloads", {}),
+        }
+        if ttft_planned:
+            raw["ttft_seconds_median"] = ttft[model]
         output[model] = {
-            "raw": {
-                "generation_tps_median": gen[model],
-                "prompt_tps_median": prompt[model],
-                "hot_total_seconds_median": total[model],
-                "cold_load_seconds_median": load[model],
-                "ttft_seconds_median": ttft[model],
-                "size_vram_bytes_median": memory[model],
-                "swap_delta_bytes_median": swap[model],
-                "runner_errors": errors[model],
-                "workloads": summary["models"].get(model, {}).get("workloads", {}),
-            },
+            "raw": raw,
             "speed_components": speed_components,
             "speed_score": speed_score,
             "memory_components": {

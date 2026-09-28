@@ -96,6 +96,10 @@ except ImportError:  # El entorno mínimo no instala el oráculo de desarrollo.
 
 @unittest.skipUnless(jsonschema is not None, "jsonschema solo pertenece al extra dev")
 class JsonSchemaOracleTests(unittest.TestCase):
+    def test_report_contract_is_valid_draft_2020_12(self) -> None:
+        assert jsonschema is not None
+        jsonschema.Draft202012Validator.check_schema(_schema("report-v3"))
+
     def test_runtime_structural_decisions_match_jsonschema(self) -> None:
         assert jsonschema is not None
         for _kind, (schema_name, path) in DATASETS.items():
